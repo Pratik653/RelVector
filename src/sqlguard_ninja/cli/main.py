@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlguard_ninja._version import __version__
+from sqlguard_ninja.benchmarking import builtin
 from sqlguard_ninja.benchmarking.adapters import (
     EXTERNAL_TOOLS,
     BenchmarkAdapter,
@@ -25,7 +26,6 @@ from sqlguard_ninja.benchmarking.adapters import (
     NativeAdapter,
     SubprocessAdapter,
 )
-from sqlguard_ninja.benchmarking import builtin
 from sqlguard_ninja.benchmarking.compare import compare
 from sqlguard_ninja.benchmarking.dataset import DatasetError, load_dataset
 from sqlguard_ninja.benchmarking.runner import load_result, run_benchmark, write_result
@@ -75,6 +75,14 @@ def _resolve(base: Path, value: str | None) -> Path | str | None:
         return None
     if value.startswith(builtin.PREFIX):
         return value  # resolved by builtin.resolve() where it is loaded
+    p = Path(value)
+    return p if p.is_absolute() else base / p
+
+
+def _resolve_file(base: Path, value: str | None) -> Path | None:
+    """Resolve an output/baseline file path (never a ``builtin:`` reference)."""
+    if value is None:
+        return None
     p = Path(value)
     return p if p.is_absolute() else base / p
 
@@ -217,11 +225,11 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
         result = run_benchmark(dataset, adapter, cases)
     finally:
         adapter.close()
-    output = Path(args.output) if args.output else _resolve(base, bench.output)
+    output = Path(args.output) if args.output else _resolve_file(base, bench.output)
     assert output is not None
     write_result(result, output)
     report = benchmark_report(result)
-    report_path = Path(args.report) if args.report else _resolve(base, bench.report)
+    report_path = Path(args.report) if args.report else _resolve_file(base, bench.report)
     if report_path is not None:
         report_path.parent.mkdir(parents=True, exist_ok=True)
         report_path.write_text(report + "\n", encoding="utf-8")
@@ -255,8 +263,8 @@ def _thresholds(args: argparse.Namespace, ci: CISection) -> Any:
 
 def cmd_benchmark_compare(args: argparse.Namespace) -> int:
     cfg, base = _load_config(args.config)
-    baseline_path = args.baseline or _resolve(base, cfg.ci.baseline)
-    candidate_path = args.candidate or _resolve(base, cfg.benchmark.output)
+    baseline_path = args.baseline or _resolve_file(base, cfg.ci.baseline)
+    candidate_path = args.candidate or _resolve_file(base, cfg.benchmark.output)
     try:
         baseline = load_result(str(baseline_path))
         candidate = load_result(str(candidate_path))
@@ -279,8 +287,8 @@ def cmd_benchmark_compare(args: argparse.Namespace) -> int:
 def cmd_benchmark_baseline(args: argparse.Namespace) -> int:
     """Copy a reviewed result to the baseline path. Meant to be run by a human."""
     cfg, base = _load_config(args.config)
-    source = Path(args.candidate) if args.candidate else _resolve(base, cfg.benchmark.output)
-    target = Path(args.output) if args.output else _resolve(base, cfg.ci.baseline)
+    source = Path(args.candidate) if args.candidate else _resolve_file(base, cfg.benchmark.output)
+    target = Path(args.output) if args.output else _resolve_file(base, cfg.ci.baseline)
     assert source is not None and target is not None
     if os.environ.get("CI") and not args.i_understand_this_is_ci:
         raise CLIError("refusing to update a baseline inside CI; review and commit it locally")
