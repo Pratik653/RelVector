@@ -20,8 +20,13 @@
 | 16 | Docs examples executable, links resolve | ✅ | tests/unit/test_docs.py |
 | 17 | actionlint | ✅ | ci.yml |
 | 18 | Restricted-function / system-catalog benchmark cases | ❌ | Not authored (see FINAL_TECHNICAL_AUDIT §6); documented as a limitation |
-| 19 | Maintainer publication confirmation | ⏳ | |
-| 20 | GitHub repo created, pushed, public | ⏳ | |
-| 21 | GitHub Actions run and green | ⏳ | |
-| 22 | "Block command line pushes that expose my email" enabled | ⏳ | maintainer setting (no API) |
-| 23 | Tag v0.1.0 + GitHub release | ⏳ | |
+| 19 | Maintainer publication authorization | ✅ | given in chat (GitHub + PyPI) |
+| 20 | GitHub repo created, pushed, public | ✅ | https://github.com/Pratik653/SQLGuard_Ninjapy — anonymous API: public, Apache-2.0 detected, `main` only |
+| 21 | Public commit emails | ✅ | all commits: noreply address only (checked via the public API) |
+| 22 | GitHub Actions, first run | ❌→fixed | run 40088280743: test matrix failed on an untracked results directory (`.gitignore` too broad); fixed in 08496a2 |
+| 23 | GitHub Actions, all 12 jobs green | ✅ | run 40089006916 on 08496a2: tests 3.11/3.12/3.13 × Linux/Windows (1,423 passed, 3 skipped — external-tool tests, 92.87% coverage without PostgreSQL), PostgreSQL service 225 passed, Docker Compose 225 passed, gate, external validators, package build |
+| 24 | Topics, private vulnerability reporting, Dependabot alerts, `pypi` environment | ✅ | configured via GitHub API |
+| 25 | "Block command line pushes that expose my email" | ⏳ | maintainer setting (no API) |
+| 26 | PyPI pending trusted publisher | ⏳ | maintainer action on pypi.org |
+| 27 | Tag v0.1.0 + GitHub release + PyPI publish | ⏳ | |
+| 28 | Fresh install from PyPI + smoke tests | ⏳ | |

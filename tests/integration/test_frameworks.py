@@ -22,7 +22,9 @@ UNSAFE = "SELECT p.card_number FROM payments p WHERE p.tenant_id = :tenant_id"
 
 @pytest.fixture
 def executor():
-    return sqlite_executor(create_sqlite(POLICY))
+    conn = create_sqlite(POLICY)
+    yield sqlite_executor(conn)
+    conn.close()  # avoid ResourceWarning: unclosed database (seen on Python 3.13 CI)
 
 
 def _ctx(trace="t", tenant=1, role="support_analyst"):
