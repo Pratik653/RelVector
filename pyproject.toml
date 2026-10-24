@@ -97,6 +97,7 @@ ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLW
 "tests/**" = ["S", "PLR", "B017", "PLC0415", "E501"]
 # Synthetic fixture data: not security-relevant randomness.
 "src/sqlguard_ninja/benchmarking/fixtures.py" = ["S311"]
+"src/sqlguard_ninja/benchmarking/workers/**" = ["E402", "S102", "F821", "PGH003", "ANN"]
 "examples/**" = ["S", "T201"]
 "scripts/**" = ["S603", "S607", "T201"]
 # The corpus generator builds SQL strings as *test data*; it never executes them.
@@ -106,6 +107,8 @@ ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLW
 python_version = "3.11"
 strict = true
 files = ["src/sqlguard_ninja"]
+# Workers run in other tools' environments and import those tools; type-checked there.
+exclude = ["src/sqlguard_ninja/benchmarking/workers/"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
