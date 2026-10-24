@@ -1,0 +1,134 @@
+name: SQLGuard Ninja SQL security check
+description: >-
+  Run SQL policy test cases with SQLGuard Ninja, compare them with an approved baseline and
+  fail on security regressions. Writes a job summary and uploads machine-readable results.
+author: SQLGuard Ninja contributors
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  config:
+    description: Path to sqlninja.yaml in the calling repository.
+    default: sqlninja.yaml
+  python-version:
+    description: Python version used to run sqlninja.
+    default: "3.12"
+  package-spec:
+    description: >-
+      pip requirement for SQLGuard Ninja. Empty means "install the action's own checkout",
+      i.e. exactly the commit you pinned in `uses:`.
+    default: ""
+  baseline-ref:
+    description: >-
+      Git ref to read the approved baseline from. For pull requests this defaults to the base
+      branch, so a pull request cannot approve its own regressions by editing the baseline.
+    default: ""
+  fail-on-regression:
+    description: Fail the job when the regression gate fails.
+    default: "true"
+  allow-benchmark-change:
+    description: Allow the case set to differ from the baseline (new cases must still pass).
+    default: "false"
+  upload-artifacts:
+    description: Upload the result, report and comparison as a workflow artifact.
+    default: "true"
+  artifact-name:
+    description: Name of the uploaded artifact.
+    default: sqlninja-results
+
+outputs:
+  passed:
+    description: "'true' if the regression gate passed."
+    value: ${{ steps.compare.outputs.passed }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Python
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install SQLGuard Ninja
+      shell: bash
+      env:
+        PACKAGE_SPEC: ${{ inputs.package-spec }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        python -m pip install --disable-pip-version-check -q "${PACKAGE_SPEC:-$ACTION_PATH}"
+        sqlninja --version
+
+    - name: Resolve baseline
+      id: baseline
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        BASELINE_REF: ${{ inputs.baseline-ref || github.base_ref }}
+      run: |
+        set -euo pipefail
+        path=$(python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])) or {}; print((d.get('ci') or {}).get('baseline', 'benchmarks/baselines/native.json'))" "$CONFIG")
+        config_dir=$(dirname "$CONFIG")
+        rel="$config_dir/$path"
+        out="$RUNNER_TEMP/sqlninja-baseline.json"
+        if [ -n "$BASELINE_REF" ]; then
+          git fetch --no-tags --depth=1 origin "$BASELINE_REF"
+          git show "FETCH_HEAD:${rel#./}" > "$out"
+          echo "Using baseline from $BASELINE_REF:${rel#./}"
+        else
+          cp "$rel" "$out"
+          echo "Using baseline from the checked-out tree: $rel"
+        fi
+        echo "file=$out" >> "$GITHUB_OUTPUT"
+
+    - name: Run SQL security benchmark
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: sqlninja benchmark run --config "$CONFIG" --summary
+
+    - name: Compare with baseline
+      id: compare
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+        BASELINE: ${{ steps.baseline.outputs.file }}
+        ALLOW_CHANGE: ${{ inputs.allow-benchmark-change }}
+        FAIL: ${{ inputs.fail-on-regression }}
+      run: |
+        set -uo pipefail
+        extra=()
+        if [ "$ALLOW_CHANGE" = "true" ]; then extra+=(--allow-benchmark-change); fi
+        sqlninja benchmark compare --config "$CONFIG" --baseline "$BASELINE" \
+          --summary --json "$RUNNER_TEMP/sqlninja-comparison.json" \
+          --report "$RUNNER_TEMP/sqlninja-comparison.md" "${extra[@]}"
+        code=$?
+        if [ "$code" -eq 0 ]; then echo "passed=true" >> "$GITHUB_OUTPUT"; else echo "passed=false" >> "$GITHUB_OUTPUT"; fi
+        if [ "$code" -ne 0 ] && [ "$FAIL" = "true" ]; then exit "$code"; fi
+        if [ "$code" -gt 1 ]; then exit "$code"; fi
+        exit 0
+
+    - name: Collect results
+      if: always() && inputs.upload-artifacts == 'true'
+      shell: bash
+      env:
+        CONFIG: ${{ inputs.config }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$RUNNER_TEMP/sqlninja-artifacts"
+        cp "$RUNNER_TEMP"/sqlninja-comparison.* "$RUNNER_TEMP/sqlninja-artifacts/" 2>/dev/null || true
+        out=$(python -c "import sys, yaml; d = yaml.safe_load(open(sys.argv[1])) or {}; b = d.get('benchmark') or {}; print(b.get('output', 'results/latest.json')); print(b.get('report') or '')" "$CONFIG")
+        config_dir=$(dirname "$CONFIG")
+        while IFS= read -r f; do
+          f=$(printf '%s' "$f" | tr -d '\r')
+          if [ -n "$f" ] && [ -f "$config_dir/$f" ]; then cp "$config_dir/$f" "$RUNNER_TEMP/sqlninja-artifacts/"; fi
+        done <<< "$out"
+
+    - name: Upload results
+      if: always() && inputs.upload-artifacts == 'true'
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      with:
+        name: ${{ inputs.artifact-name }}
+        path: ${{ runner.temp }}/sqlninja-artifacts/
+        if-no-files-found: warn

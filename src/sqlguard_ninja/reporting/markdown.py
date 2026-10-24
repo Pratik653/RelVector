@@ -119,6 +119,7 @@ def comparison_report(comp: Comparison, *, max_items: int = 20) -> str:
         ("Newly blocked legitimate queries", comp.usability_regressions),
         ("New validator errors", comp.new_errors),
         ("New parse failures on legitimate queries", comp.new_parse_failures),
+        ("Changed expected labels (need explicit approval)", comp.label_changes),
         ("Other decision changes", comp.decision_changes),
         ("Improvements", comp.improvements),
     ]

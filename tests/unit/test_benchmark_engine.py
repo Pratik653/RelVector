@@ -277,3 +277,12 @@ def test_compare_new_validator_error():
     cand = _result([_c("a", "deny", "deny", error="boom")])
     comp = compare(base, cand)
     assert comp.new_errors == ["a"] and not comp.passed
+
+
+def test_compare_flags_relabelled_cases():
+    """Relabelling deny->allow together with an engine change must not pass silently."""
+    base = _result([_c("a", "deny", "deny")])
+    cand = _result([_c("a", "allow", "allow")])
+    comp = compare(base, cand)
+    assert comp.label_changes == ["a"] and not comp.passed
+    assert compare(base, cand, Thresholds(allow_label_changes=True)).passed

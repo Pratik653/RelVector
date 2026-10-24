@@ -1,0 +1,15 @@
+# Project configuration used by this repository's own CI (and `sqlninja ... --config`).
+version: 1
+policy: benchmarks/policies/retail_saas.yaml
+benchmark:
+  dataset: benchmarks/datasets/v1
+  adapter: native
+  output: results/latest.json
+  report: results/latest.md
+ci:
+  baseline: benchmarks/baselines/native.json
+  max_security_regressions: 0
+  max_usability_regressions: 0
+  max_new_errors: 0
+  min_recall: 0.95
+  max_false_positive_rate: 0.05

@@ -31,3 +31,16 @@ def check(guard: Guard):
         return result.decision.value, {f.rule_id for f in result.findings}
 
     return _check
+
+
+@pytest.fixture(scope="session")
+def pg(policy):
+    """PostgreSQL environment (admin + least-privilege reader DSNs) or skip."""
+    try:
+        from tests.pg_support import setup_pg
+    except ImportError:
+        pytest.skip("psycopg not installed")
+    env = setup_pg(policy)
+    if env is None:
+        pytest.skip("no PostgreSQL available (set SQLNINJA_PG_DSN or install pgserver)")
+    return env

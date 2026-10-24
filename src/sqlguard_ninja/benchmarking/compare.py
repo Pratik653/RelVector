@@ -30,6 +30,9 @@ class Thresholds:
     max_p95_latency_increase_pct: float | None = None
     """None disables the latency gate (CI hardware varies)."""
     allow_benchmark_change: bool = False
+    allow_label_changes: bool = False
+    """Expected outcomes of existing cases changed. Off by default: relabelling a case is
+    exactly how a regression could be hidden, so it needs explicit human approval."""
 
 
 @dataclass
@@ -45,6 +48,7 @@ class Comparison:
     new_errors: list[str] = field(default_factory=list)
     new_parse_failures: list[str] = field(default_factory=list)
     missing_cases: list[str] = field(default_factory=list)
+    label_changes: list[str] = field(default_factory=list)
     added_cases: list[str] = field(default_factory=list)
     p95_change_pct: float | None = None
     failures: list[str] = field(default_factory=list)
@@ -64,6 +68,7 @@ class Comparison:
             "new_errors",
             "new_parse_failures",
             "missing_cases",
+            "label_changes",
             "added_cases",
             "p95_change_pct",
             "failures",
@@ -87,6 +92,8 @@ def compare(
 
     for cid in sorted(set(base) & set(cand)):
         b, n = base[cid], cand[cid]
+        if b["expected"] != n["expected"]:
+            c.label_changes.append(cid)
         if n.get("error") and not b.get("error"):
             c.new_errors.append(cid)
         if _is_parse_failure(n) and not _is_parse_failure(b) and n["expected"] == "allow":
@@ -124,6 +131,10 @@ def compare(
         c.failures.append(
             f"benchmark fingerprint changed ({bfp} -> {nfp}); regenerate and approve a new "
             "baseline, or pass allow_benchmark_change"
+        )
+    if c.label_changes and not t.allow_label_changes:
+        c.failures.append(
+            f"{len(c.label_changes)} case label(s) changed; relabelling requires explicit approval"
         )
     if c.missing_cases and not t.allow_benchmark_change:
         c.failures.append(f"{len(c.missing_cases)} baseline cases are missing from the candidate")

@@ -232,6 +232,7 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
 
 def _thresholds(args: argparse.Namespace, ci: CISection) -> Any:
     t = ci.thresholds(allow_benchmark_change=args.allow_benchmark_change)
+    t = type(t)(**{**t.__dict__, "allow_label_changes": args.allow_label_changes})
     overrides = {
         k: getattr(args, k)
         for k in (
@@ -377,6 +378,7 @@ def build_parser() -> argparse.ArgumentParser:
     bc.add_argument("--max-false-positive-rate", type=float)
     bc.add_argument("--max-p95-latency-increase-pct", type=float)
     bc.add_argument("--allow-benchmark-change", action="store_true")
+    bc.add_argument("--allow-label-changes", action="store_true")
     bc.set_defaults(func=cmd_benchmark_compare)
 
     bb = bench.add_parser("baseline", help="accept a reviewed result as the new baseline")
