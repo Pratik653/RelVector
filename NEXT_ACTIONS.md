@@ -3,15 +3,17 @@
 _Updated 2026-10-24. On resume: read IMPLEMENTATION_STATUS.md, run
 `.venv/Scripts/python -m pytest -q` and `git log --oneline`, then continue from the top._
 
-## Release (in progress)
+## Release
 
-1. ✅ Email privacy: history rewritten to the verified noreply address (local backup branch
-   `backup/pre-email-rewrite` must never be pushed).
-2. ⏳ Maintainer confirms publication (summary prepared).
-3. Then: `gh repo create Pratik653/SQLGuard_Ninjapy --public`, push `main` only, watch CI,
-   fix failures, tag `v0.1.0`, publish release notes from docs/releases/v0.1.0.md, enable
-   private vulnerability reporting, Dependabot and branch protection; record SHAs and run
-   URLs in RELEASE_CHECKLIST.md.
+v0.1.0 is released on GitHub and PyPI and verified (see RELEASE_CHECKLIST.md).
+
+## Post-release maintenance (next)
+
+1. 0.1.1: make README links absolute so they work on the PyPI page (relative links break there).
+2. Maintainer: enable "Block command line pushes that expose my email" (GitHub → Settings → Emails);
+   add branch protection on `main` requiring the CI checks; add CODEOWNERS for `benchmarks/` and `.github/`.
+3. Review Dependabot PRs; keep actions SHA-pinned.
+4. Delete the local `backup/pre-email-rewrite` branch once you no longer need the old history (it was never pushed).
 
 ## Engineering backlog
 

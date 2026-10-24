@@ -14,7 +14,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | WS3 Privacy policy pack | ✅ | ✅ | ✅ | ✅ | ✅ |
 | WS4 Static cost score | ✅ | ✅ | ✅ | ✅ | ✅ |
 | WS4 PostgreSQL EXPLAIN inspector + Docker Compose | ✅ | ✅ inspector on embedded PostgreSQL 16; 🟡 Compose file only validated in CI (no Docker locally) | ✅ | ✅ | 🟡 |
-| WS5 CI workflow + composite action | ✅ | 🟡 actionlint clean; action shell steps simulated locally (pass and fail paths); **not yet run on GitHub** | ✅ | ✅ | 🟡 until first CI run |
+| WS5 CI workflow + composite action | ✅ | ✅ 12/12 jobs green on GitHub (run 40089304432) | ✅ | ✅ | ✅ |
 
 ## Verification run (local, Windows 11, Python 3.11.9, 2026-10-24)
 
@@ -72,4 +72,4 @@ default merge), CST-012 (self-join cost relabelled to review, rationale in the c
   content. The rules are implemented. Their mechanics are unit-tested with fictitious
   function names (`tests/unit/test_function_policy_mechanics.py`), and the categories need
   maintainer-contributed cases.
-* GitHub publication has not happened yet; it needs the maintainer's explicit approval.
+* Released as v0.1.0 on GitHub and PyPI (see RELEASE_CHECKLIST.md). README relative links do not resolve on the PyPI page; fix planned for 0.1.1.

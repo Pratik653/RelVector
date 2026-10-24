@@ -47,3 +47,8 @@ security, statement timeouts, resource limits or authentication.
 ## Security scope
 * SQLGuard Ninja does not guarantee protection against SQL injection or data leakage. It
   validates SQL against a declared policy; database-native controls remain authoritative.
+
+## Packaging
+* README links are relative, so the docs links on the PyPI project page do not resolve in
+  0.1.0 (they work on GitHub). Planned fix: absolute links in 0.1.1.
+* The runnable examples live in the repository and are not part of the wheel.

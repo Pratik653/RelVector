@@ -27,6 +27,9 @@
 | 23 | GitHub Actions, all 12 jobs green | ✅ | run 40089006916 on 08496a2: tests 3.11/3.12/3.13 × Linux/Windows (1,423 passed, 3 skipped — external-tool tests, 92.87% coverage without PostgreSQL), PostgreSQL service 225 passed, Docker Compose 225 passed, gate, external validators, package build |
 | 24 | Topics, private vulnerability reporting, Dependabot alerts, `pypi` environment | ✅ | configured via GitHub API |
 | 25 | "Block command line pushes that expose my email" | ⏳ | maintainer setting (no API) |
-| 26 | PyPI pending trusted publisher | ⏳ | maintainer action on pypi.org |
-| 27 | Tag v0.1.0 + GitHub release + PyPI publish | ⏳ | |
-| 28 | Fresh install from PyPI + smoke tests | ⏳ | |
+| 26 | PyPI pending trusted publisher | ✅ | configured by maintainer; proven by a successful OIDC publish |
+| 27 | Tag v0.1.0 + GitHub release + PyPI publish | ✅ | annotated tag `v0.1.0` → f5ac314dd87bea3be138c0f5b942cbf2d84d9efa; release https://github.com/Pratik653/SQLGuard_Ninjapy/releases/tag/v0.1.0; workflow run 40089832720 (build + publish succeeded); PyPI lists `sqlguard_ninja-0.1.0-py3-none-any.whl` and `sqlguard_ninja-0.1.0.tar.gz`, both with PEP 740 provenance |
+| 28 | Fresh install from PyPI + smoke tests | ✅ | new venvs outside the repo, `--no-cache-dir --index-url https://pypi.org/simple`: core (Python 3.13) — import from site-packages, `--help`, README CLI and SDK examples, bundled 1,002-evaluation benchmark, init/run/baseline/compare; `[all]` (Python 3.11) — LangChain tool, LangGraph graph, FastAPI router (200/403), psycopg |
+| 29 | CI on release commit | ✅ | run 40089304432 on f5ac314: 12/12 jobs succeeded |
+
+Release commit: `f5ac314dd87bea3be138c0f5b942cbf2d84d9efa`. Later commits on `main` only update documentation.
