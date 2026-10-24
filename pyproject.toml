@@ -64,6 +64,12 @@ path = "src/sqlguard_ninja/_version.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/sqlguard_ninja"]
 
+# The reference corpus and policy ship inside the wheel so `builtin:v1` and
+# `builtin:retail_saas` work after `pip install` (relative layout is preserved).
+[tool.hatch.build.targets.wheel.force-include]
+"benchmarks/datasets" = "sqlguard_ninja/_data/benchmarks/datasets"
+"benchmarks/policies" = "sqlguard_ninja/_data/benchmarks/policies"
+
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "benchmarks", "examples", "docs", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md"]
 

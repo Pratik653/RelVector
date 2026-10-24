@@ -24,7 +24,7 @@ def test_readme_cli_example(capsys):
         [
             "validate",
             "--policy",
-            str(POLICY_PATH),
+            "builtin:retail_saas",
             "--role",
             "support_analyst",
             "--tenant",

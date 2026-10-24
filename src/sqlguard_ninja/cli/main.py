@@ -25,6 +25,7 @@ from sqlguard_ninja.benchmarking.adapters import (
     NativeAdapter,
     SubprocessAdapter,
 )
+from sqlguard_ninja.benchmarking import builtin
 from sqlguard_ninja.benchmarking.compare import compare
 from sqlguard_ninja.benchmarking.dataset import DatasetError, load_dataset
 from sqlguard_ninja.benchmarking.runner import load_result, run_benchmark, write_result
@@ -69,19 +70,24 @@ def _load_config(path: str | None) -> tuple[ProjectConfig, Path]:
         raise CLIError(f"cannot load config {path}: {exc}") from exc
 
 
-def _resolve(base: Path, value: str | None) -> Path | None:
+def _resolve(base: Path, value: str | None) -> Path | str | None:
     if value is None:
         return None
+    if value.startswith(builtin.PREFIX):
+        return value  # resolved by builtin.resolve() where it is loaded
     p = Path(value)
     return p if p.is_absolute() else base / p
 
 
 def _load_policy(path: str | Path | None) -> Policy:
     if path is None:
-        raise CLIError("no policy given (use --policy or set 'policy' in sqlninja.yaml)")
+        raise CLIError(
+            "no policy given (use --policy FILE, --policy builtin:retail_saas, "
+            "or set 'policy' in sqlninja.yaml)"
+        )
     try:
-        return Policy.from_file(path)
-    except PolicyError as exc:
+        return Policy.from_file(builtin.resolve(path, "policy"))
+    except (PolicyError, FileNotFoundError) as exc:
         raise CLIError(str(exc)) from exc
 
 
@@ -200,7 +206,7 @@ def cmd_benchmark_run(args: argparse.Namespace) -> int:
     bench = cfg.benchmark
     dataset_path = args.dataset or _resolve(base, bench.dataset)
     try:
-        dataset = load_dataset(str(dataset_path))
+        dataset = load_dataset(builtin.resolve(str(dataset_path), "dataset"))
     except (DatasetError, PolicyError, OSError) as exc:
         raise CLIError(f"cannot load dataset {dataset_path}: {exc}") from exc
     cases = dataset.filter(dialect=args.dialect or bench.dialect, category=args.category)
@@ -300,7 +306,7 @@ def cmd_dataset_stats(args: argparse.Namespace) -> int:
     cfg, base = _load_config(args.config)
     path = args.dataset or _resolve(base, cfg.benchmark.dataset)
     try:
-        ds = load_dataset(str(path))
+        ds = load_dataset(builtin.resolve(str(path), "dataset"))
     except (DatasetError, PolicyError, OSError) as exc:
         raise CLIError(str(exc)) from exc
     _out(json.dumps({"fingerprint": ds.fingerprint, **ds.stats()}, indent=2))

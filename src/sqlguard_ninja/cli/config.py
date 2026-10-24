@@ -16,7 +16,7 @@ class _M(BaseModel):
 
 
 class BenchmarkSection(_M):
-    dataset: str = "benchmarks/datasets/v1"
+    dataset: str = "builtin:v1"
     adapter: str = "native"
     output: str = "results/latest.json"
     report: str | None = "results/latest.md"

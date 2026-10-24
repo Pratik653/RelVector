@@ -3,7 +3,7 @@
 All notable changes are documented here. The project follows
 [Semantic Versioning](https://semver.org/); before 1.0, minor versions may change the API.
 
-## [0.1.0] — unreleased
+## [0.1.0] — 2026-10-24
 
 First release.
 
@@ -22,6 +22,14 @@ First release.
   adapters (native, callable, isolated external workers for three existing tools), JSON
   and Markdown reports, baseline comparison with a label-change gate.
 * `sqlninja` CLI and a composite GitHub Action.
+
+### Known limitations
+* The benchmark corpus does not contain cases for two categories: **restricted functions** (e.g. calls to server file-access, sleep, dynamic-SQL or administrative functions) and **system catalogs** (PostgreSQL `pg_catalog`/`information_schema`, SQLite `sqlite_master`/`sqlite_schema`, in qualified, joined, CTE and nested positions). The corresponding rules (`function.*`, `catalog.system_object`) ship and run by default; their mechanics are unit-tested with fictitious function names, but their detection is not measured by the benchmark.
+* Writes are always denied; only PostgreSQL and SQLite are tested.
+
+### Packaging
+* The reference corpus and policy are bundled in the wheel (`builtin:v1`, `builtin:retail_saas`).
+* Published to PyPI through GitHub Actions Trusted Publishing (OIDC).
 
 ### Fixed during development (each with a regression test)
 * Unknown select-list columns were allowed when qualification aliased them to themselves.

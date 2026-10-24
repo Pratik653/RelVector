@@ -41,9 +41,9 @@ security, statement timeouts, resource limits or authentication.
 * The corpus is authored by this project. Allow labels are validated by execution on SQLite
   and PostgreSQL 16, but it is not an external standard, and the native engine was
   developed alongside it.
-* Restricted-function and system-catalog categories are not yet authored.
+* Missing benchmark categories. The benchmark corpus does not contain cases for two categories: **restricted functions** (e.g. calls to server file-access, sleep, dynamic-SQL or administrative functions) and **system catalogs** (PostgreSQL `pg_catalog`/`information_schema`, SQLite `sqlite_master`/`sqlite_schema`, in qualified, joined, CTE and nested positions). The corresponding rules (`function.*`, `catalog.system_object`) ship and run by default; their mechanics are unit-tested with fictitious function names, but their detection is not measured by the benchmark.
 * External tools are compared through a documented, conservative policy translation.
 
-## CI
-* The workflow and composite action have been linted and simulated locally, but have not
-  run on GitHub yet.
+## Security scope
+* SQLGuard Ninja does not guarantee protection against SQL injection or data leakage. It
+  validates SQL against a declared policy; database-native controls remain authoritative.

@@ -4,6 +4,7 @@
 benchmarking for LLM-generated SQL.**
 
 [![CI](https://github.com/Pratik653/SQLGuard_Ninjapy/actions/workflows/ci.yml/badge.svg)](https://github.com/Pratik653/SQLGuard_Ninjapy/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/sqlguard-ninja)](https://pypi.org/project/sqlguard-ninja/)
 ![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
 ![License](https://img.shields.io/badge/license-Apache--2.0-green)
 
@@ -68,19 +69,18 @@ Design decisions and their trade-offs are recorded in
 
 ## Five-minute quick start
 
-Not published on PyPI yet. Install from source:
-
 ```bash
-git clone https://github.com/Pratik653/SQLGuard_Ninjapy.git
-cd SQLGuard_Ninjapy
-python -m pip install -e ".[all]"
+python -m pip install sqlguard-ninja            # core: sqlglot, pydantic, PyYAML
+python -m pip install "sqlguard-ninja[all]"     # + LangChain, LangGraph, FastAPI, psycopg
 ```
 
-Validate a query:
+Extras: `langchain`, `langgraph`, `fastapi`, `postgres`, `all`. Python 3.11+.
+
+Validate a query against the bundled reference policy (`builtin:retail_saas`, a synthetic
+multi-tenant retail schema):
 
 ```bash
-sqlninja validate --policy benchmarks/policies/retail_saas.yaml --role support_analyst --tenant 1 \
-  --sql "SELECT o.id FROM orders o WHERE o.tenant_id = 1 OR 1 = 1"
+sqlninja validate --policy builtin:retail_saas --role support_analyst --tenant 1   --sql "SELECT o.id FROM orders o WHERE o.tenant_id = 1 OR 1 = 1"
 ```
 
 ```
@@ -90,19 +90,22 @@ DENY:
 
 Exit codes: 0 allow, 1 deny, 3 review, 2 usage error.
 
-Run the demos (deterministic; no API key needed):
+Run the bundled benchmark corpus, then start your own project:
 
 ```bash
+sqlninja benchmark run --dataset builtin:v1 --output results/native.json
+sqlninja init my-project && cd my-project
+sqlninja benchmark run --config sqlninja.yaml
+```
+
+The runnable demos live in the repository (deterministic; no API key needed):
+
+```bash
+git clone https://github.com/Pratik653/SQLGuard_Ninjapy.git && cd SQLGuard_Ninjapy
+python -m pip install -e ".[all]"
 python examples/sdk/quickstart.py
 python examples/sqlite/text_to_sql_demo.py
 python examples/langgraph/sql_agent_demo.py
-```
-
-Start your own project:
-
-```bash
-sqlninja init my-project && cd my-project
-sqlninja benchmark run --config sqlninja.yaml
 ```
 
 ## Python SDK
@@ -110,7 +113,9 @@ sqlninja benchmark run --config sqlninja.yaml
 ```python
 from sqlguard_ninja import Guard, Policy
 
-guard = Guard(Policy.from_file("benchmarks/policies/retail_saas.yaml"))
+from sqlguard_ninja.benchmarking.builtin import resolve
+
+guard = Guard(Policy.from_file(resolve("builtin:retail_saas", "policy")))
 result = guard.validate(
     "SELECT department, AVG(salary) FROM employees GROUP BY department",
     role="hr_analyst",
@@ -212,9 +217,9 @@ See [QUERY_COST.md](docs/guides/QUERY_COST.md) and `examples/postgresql/plan_ins
 ## Benchmark
 
 ```bash
-sqlninja benchmark run --dataset benchmarks/datasets/v1 --adapter native
-python scripts/setup_external_adapters.py          # isolated venvs for other tools
-sqlninja benchmark run --dataset benchmarks/datasets/v1 --adapter external:sql-guardrail
+sqlninja benchmark run --dataset builtin:v1 --adapter native
+python scripts/setup_external_adapters.py          # (repository) isolated venvs for other tools
+sqlninja benchmark run --dataset builtin:v1 --adapter external:sql-guardrail
 sqlninja benchmark compare --baseline benchmarks/baselines/native.json --candidate results/latest.json
 ```
 
@@ -264,6 +269,14 @@ Use database grants, row-level security and timeouts as the authoritative contro
 Next: restricted-function and system-catalog benchmark cases, an independent held-out
 corpus, lineage-aware aggregate checks, and tenant predicate push-down. Later: governed
 writes, more tested dialects, and SARIF output. Details in [ROADMAP.md](ROADMAP.md).
+
+## Links
+
+* Repository: https://github.com/Pratik653/SQLGuard_Ninjapy
+* Releases: https://github.com/Pratik653/SQLGuard_Ninjapy/releases
+* PyPI: https://pypi.org/project/sqlguard-ninja/
+* Issues: https://github.com/Pratik653/SQLGuard_Ninjapy/issues
+* Security policy: [SECURITY.md](SECURITY.md) · Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 
 ## Documentation
 

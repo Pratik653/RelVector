@@ -161,3 +161,28 @@ def test_output_survives_legacy_console_encoding(monkeypatch):
     _out("status: ✅ PASSED")
     stream.flush()
     assert raw.getvalue() == b"status: ? PASSED\n"
+
+
+def test_builtin_dataset_and_policy(capsys):
+    rc, out, _ = run(capsys, "dataset", "stats", "--dataset", "builtin:v1")
+    assert rc == 0 and json.loads(out)["unique_cases"] >= 500
+    rc, out, _ = run(
+        capsys,
+        "validate",
+        "--policy",
+        "builtin:retail_saas",
+        "--role",
+        "hr_analyst",
+        "--sql",
+        "SELECT MAX(salary) FROM employees",
+    )
+    assert rc == 1 and "privacy.aggregate_only" in out
+    rc, _, err = run(capsys, "validate", "--policy", "builtin:nope", "--sql", "SELECT 1")
+    assert rc == 2 and "available" in err
+
+
+def test_benchmark_defaults_to_builtin_without_config(capsys, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # no sqlninja.yaml here
+    rc, out, _ = run(capsys, "benchmark", "run", "--category", "destructive")
+    assert rc == 0 and "evaluations" in out
+    assert (tmp_path / "results" / "latest.json").exists()
