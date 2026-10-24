@@ -1,0 +1,16 @@
+name: Benchmark case
+description: Propose new labelled benchmark cases.
+labels: [benchmark]
+body:
+  - type: textarea
+    id: cases
+    attributes:
+      label: Cases
+      description: id, sql, dialects, role, expected, reason, category, explanation (see docs/guides/BENCHMARK_METHODOLOGY.md)
+      render: yaml
+    validations: {required: true}
+  - type: textarea
+    id: rationale
+    attributes:
+      label: Why the expected outcome is right under the documented semantics
+    validations: {required: true}

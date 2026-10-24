@@ -1,0 +1,26 @@
+name: Bug report
+description: Something does not work as documented (not a security bypass).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        **Security bypasses must be reported privately** (see SECURITY.md), not here.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened and what you expected
+    validations: {required: true}
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: SQL, dialect, policy excerpt, role and context. Use synthetic data only.
+      render: yaml
+    validations: {required: true}
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      placeholder: sqlguard-ninja 0.1.0, sqlglot 30.24.0, Python 3.12
+    validations: {required: true}

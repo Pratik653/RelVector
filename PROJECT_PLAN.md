@@ -10,3 +10,8 @@
 | M6 Release | docs, threat model, release checks | all checks pass; maintainer approval before publication |
 
 Dependencies: M2 needs M1. M3, M4, M5 need M1, and M5 needs M2's compare logic.
+
+## Status (2026-10-24)
+
+M1–M5 implemented and tested locally (see IMPLEMENTATION_STATUS.md). M6: release checks pass
+locally; publication awaits maintainer approval.
