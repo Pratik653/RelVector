@@ -17,3 +17,4 @@ This file logs smaller implementation decisions.
 | 2026-10-24 | Baseline for PRs read from the base branch in the action | A PR cannot approve its own regression |
 | 2026-10-24 | Cast of the tenant column is not a pin | Casts can be lossy (text '01' vs '1') |
 | 2026-10-24 | Redaction marker is a neutral `?` | Dialect placeholders (`%s`) are confusing in audit logs |
+| 2026-10-24 | Rewrote local history to the GitHub noreply address before first push | Maintainer's email privacy requirement; history never published |

@@ -1,6 +1,6 @@
 # Implementation status
 
-_Updated 2026-10-24 (release candidate 0.1.0). Evidence only: a column is ticked only when
+_Updated 2026-10-24 (release candidate 0.1.0, audited — see docs/release/FINAL_TECHNICAL_AUDIT.md). Evidence only: a column is ticked only when
 it is backed by tests or files in this repository._
 
 Legend: ✅ done · 🟡 partial · ⬜ not started
@@ -23,7 +23,7 @@ Legend: ✅ done · 🟡 partial · ⬜ not started
 | `ruff check` / `ruff format --check` (src, tests, scripts, examples) | pass / pass (79 files) |
 | `mypy` (strict, 43 files) | pass |
 | `python scripts/generate_corpus.py --check` | pass (268 generated cases reproducible) |
-| `pytest` | **1,646 passed**, 0 failed, 0 skipped (225 against PostgreSQL 16.2 via `pgserver`) |
+| `pytest` | **1,649 passed**, 0 failed, 0 skipped (225 against PostgreSQL 16.2 via `pgserver`); Python 3.13: 1,424 passed, 225 PostgreSQL tests skipped |
 | Branch coverage, `sqlguard_ninja` | **95%** |
 | `actionlint` 1.7.12 on `.github/workflows/ci.yml` | pass |
 | `python -m build` + clean install of the wheel on Python 3.13 | pass (`sqlninja --version`, `init`, `benchmark run`, `policy check`) |

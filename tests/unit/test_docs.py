@@ -99,3 +99,32 @@ def test_relative_links_resolve(doc: Path):
         if not (doc.parent / target).resolve().exists():
             missing.append(target)
     assert not missing, f"{doc.name}: broken links {missing}"
+
+
+def test_readme_privacy_and_cost_outputs():
+    guard = Guard(Policy.from_file(POLICY_PATH))
+    ctx = {"tenant_id": 1}
+    card = guard.validate(
+        "SELECT p.card_number FROM payments p WHERE p.tenant_id = 1",
+        role="support_analyst",
+        context=ctx,
+    ).explain()
+    assert "privacy.label_denied: The column 'payments.card_number' contains classified" in card
+    assert "Use column 'payments.card_last4' instead" in card
+    cohort = guard.validate("SELECT AVG(salary) FROM employees WHERE id = 7", role="hr_analyst")
+    assert cohort.explain().startswith("REVIEW:") and "privacy.small_cohort" in cohort.explain()
+    cost = guard.validate(
+        "SELECT o.id, i.id FROM orders o CROSS JOIN order_items i", role="platform_admin"
+    ).explain()
+    assert "cost.static_score: Estimated query cost risk is 100/100" in cost
+
+
+def test_readme_privacy_yaml_fragment_is_valid():
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    fragment = yaml.safe_load(
+        re.search(r"## Privacy policies.*?```yaml\n(.*?)```", text, re.S).group(1)
+    )
+    full = yaml.safe_load(POLICY_PATH.read_text(encoding="utf-8"))
+    for role, spec in fragment["roles"].items():
+        for label, access in spec["labels"].items():
+            assert full["roles"][role]["labels"][label] == access

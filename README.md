@@ -145,6 +145,70 @@ app.invoke(state, config={"configurable": {CONTEXT_KEY: ctx}})       # nodes can
 More in [AGENT_INTEGRATION.md](docs/guides/AGENT_INTEGRATION.md): the LangChain tool (its
 schema accepts only `query`), the FastAPI router, review-mode approvals and audit sinks.
 
+## Privacy policies
+
+Sensitivity comes from labels **you** assign in the policy, never from column names, and
+access is resolved per role:
+
+```yaml
+labels:
+  payment_card: {sensitivity: critical, masking: use card_last4 and card_brand}
+  financial:    {sensitivity: high}
+catalog:
+  tables:
+    payments:
+      tenant_column: tenant_id
+      columns:
+        card_number: {labels: [payment_card], alternatives: [card_last4]}
+        card_last4: text
+roles:
+  support_analyst:
+    tables: {payments: [id, tenant_id, card_last4, card_brand, amount, status]}
+    labels: {payment_card: deny, financial: deny}
+  hr_analyst:
+    tables: {employees: "*"}
+    labels: {hr: allow, financial: aggregate_only}   # salary only inside COUNT/SUM/AVG
+```
+
+```text
+support_analyst> SELECT p.card_number FROM payments p WHERE p.tenant_id = 1
+DENY:
+  [deny] privacy.label_denied: The column 'payments.card_number' contains classified data (payment_card) that this role may not access. Suggestion: Use column 'payments.card_last4' instead. ...
+
+hr_analyst> SELECT AVG(salary) FROM employees WHERE id = 7
+REVIEW:
+  [review] privacy.small_cohort: An aggregate of restricted data is filtered or grouped by an identifying column, which can reveal individual values. ...
+```
+
+Labels also apply to paths inside JSON columns (`profile->'health'->>'allergies'`).
+`sqlninja policy suggest` proposes labels from column names for a human to review; those
+suggestions are never enforced. This is a technical control, not a certification of GDPR
+compliance. Full semantics: [POLICY_REFERENCE.md](docs/guides/POLICY_REFERENCE.md).
+
+## Query cost analysis
+
+Every validation includes an explainable static score that uses the catalog's
+`estimated_rows`:
+
+```text
+platform_admin> SELECT o.id, i.id FROM orders o CROSS JOIN order_items i
+DENY:
+  [deny] cost.static_score: Estimated query cost risk is 100/100: join with i has no join condition (Cartesian product); o has an estimated 10,000,000 rows and is read without a filter; ...
+```
+
+Optionally, compare it with PostgreSQL's planner. This runs `EXPLAIN (FORMAT JSON)` only,
+never `ANALYZE`, and only on SQL the guard allowed, inside a read-only, time-limited,
+rolled-back transaction:
+
+```python
+from sqlguard_ninja.query_cost.postgres import PostgresPlanInspector
+report = PostgresPlanInspector(guard, lambda: psycopg.connect(READER_DSN)).inspect(
+    sql, role="support_analyst", context={"tenant_id": 1})
+report.total_cost, report.plan_rows, report.static.score, report.findings
+```
+
+See [QUERY_COST.md](docs/guides/QUERY_COST.md) and `examples/postgresql/plan_inspection_demo.py`.
+
 ## Benchmark
 
 ```bash
@@ -180,6 +244,26 @@ duplicate. [agent-sql-guard](https://github.com/sakura-sky/sql-guard) has a care
 schema-less PII denylist. What SQLGuard Ninja adds: role- and label-based policies, the agent
 checkpoint contract, a shared benchmark with isolated adapters, planner inspection, and the
 CI gate. Full comparison: [COMPETITIVE_ANALYSIS.md](docs/research/COMPETITIVE_ANALYSIS.md).
+
+## Security limitations
+
+* Static inspection can be wrong where sqlglot and the real database parse SQL differently.
+  Only PostgreSQL and SQLite are tested.
+* It cannot see inside views or user-defined functions, and it does not stop inference
+  across many permitted queries.
+* Cost scores and planner estimates are indicators, not guarantees.
+* v0.1 denies all writes.
+* The benchmark has no restricted-function or system-catalog cases yet. The rules exist,
+  but those two categories are not measured.
+
+Use database grants, row-level security and timeouts as the authoritative controls. See the
+[threat model](docs/security/THREAT_MODEL.md) and [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md).
+
+## Roadmap
+
+Next: restricted-function and system-catalog benchmark cases, an independent held-out
+corpus, lineage-aware aggregate checks, and tenant predicate push-down. Later: governed
+writes, more tested dialects, and SARIF output. Details in [ROADMAP.md](ROADMAP.md).
 
 ## Documentation
 
