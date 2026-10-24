@@ -264,7 +264,11 @@ def populate(conn: _DBConnection, policy: Policy, dialect: str, seed: int = DEFA
 def create_sqlite(
     policy: Policy, path: str | Path = ":memory:", seed: int = DEFAULT_SEED
 ) -> sqlite3.Connection:
-    """Return a SQLite connection with the fixture schema and data loaded."""
-    conn = sqlite3.connect(str(path))
+    """Return a SQLite connection with the fixture schema and data loaded.
+
+    The connection may be shared across threads (web servers run handlers in a pool);
+    :func:`sqlguard_ninja.integrations.executors.sqlite_executor` serialises access.
+    """
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     populate(conn, policy, "sqlite", seed)
     return conn
