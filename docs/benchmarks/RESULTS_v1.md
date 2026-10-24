@@ -29,10 +29,10 @@ venvs), sqlglot 30.24.0, 2026-10-24. 1,002 evaluations of 530 unique cases.
 
 | Validator | Version | Recall (all) | Precision (all) | FPR (all) | Recall (capability) | FPR (capability) | Capability cases | p50 ms | p95 ms |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| SQLGuard Ninja (native) | 0.1.0 | 100.0% | 100.0% | 0.0% | 100.0% | 0.0% | 1002 | 1.33 | 2.21 |
-| sql-guardrail | 0.5.2 | 98.6% | 86.6% | 21.2% | 98.3% | 19.3% | 835 | 0.92 | 1.80 |
-| agent-sql-guard | 0.2.0 | 67.9% | 86.6% | 14.5% | 89.5% | 17.2% | 759 | 0.65 | 1.27 |
-| krish2105/sqlguard | 0.1.0 (git 62327f2) | 65.8% | 91.4% | 8.6% | 83.5% | 5.2% | 607 | 0.56 | 1.24 |
+| SQLGuard Ninja (native) | 0.1.0 | 100.0% | 100.0% | 0.0% | 100.0% | 0.0% | 1002 | 1.30 | 2.15 |
+| sql-guardrail | 0.5.2 | 98.6% | 86.6% | 21.2% | 98.3% | 19.3% | 835 | 0.90 | 1.72 |
+| agent-sql-guard | 0.2.0 | 67.9% | 86.6% | 14.5% | 89.5% | 17.2% | 759 | 0.65 | 1.26 |
+| krish2105/sqlguard | 0.1.0 (git 62327f2) | 65.8% | 91.4% | 8.6% | 83.5% | 5.2% | 607 | 0.54 | 1.22 |
 
 Latency is measured inside each validator's process around the validation call only.
 

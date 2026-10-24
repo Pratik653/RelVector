@@ -228,10 +228,10 @@ Results for corpus v1.0.0 (Windows 11, Python 3.11, 1,002 evaluations). Details 
 
 | Validator | Recall | Precision | FPR | Recall / FPR within declared capability | p95 ms |
 |---|---:|---:|---:|---:|---:|
-| SQLGuard Ninja 0.1.0 | 100.0% | 100.0% | 0.0% | 100.0% / 0.0% | 2.21 |
-| sql-guardrail 0.5.2 | 98.6% | 86.6% | 21.2% | 98.3% / 19.3% | 1.80 |
-| agent-sql-guard 0.2.0 | 67.9% | 86.6% | 14.5% | 89.5% / 17.2% | 1.27 |
-| krish2105/sqlguard 0.1.0 | 65.8% | 91.4% | 8.6% | 83.5% / 5.2% | 1.24 |
+| SQLGuard Ninja 0.1.0 | 100.0% | 100.0% | 0.0% | 100.0% / 0.0% | 2.15 |
+| sql-guardrail 0.5.2 | 98.6% | 86.6% | 21.2% | 98.3% / 19.3% | 1.72 |
+| agent-sql-guard 0.2.0 | 67.9% | 86.6% | 14.5% | 89.5% / 17.2% | 1.26 |
+| krish2105/sqlguard 0.1.0 | 65.8% | 91.4% | 8.6% | 83.5% / 5.2% | 1.22 |
 
 **Read the native row with care.** The corpus and the engine were developed together, and
 every disagreement was triaged by fixing the engine or correcting a label (both are logged).

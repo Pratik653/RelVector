@@ -19,7 +19,7 @@ venv/
 coverage.xml
 htmlcov/
 # Local artefacts
-results/
+/results/
 *.sqlite3
 *.db
 .pgdata/

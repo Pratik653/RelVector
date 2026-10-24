@@ -38,10 +38,10 @@ covers these), Docker Compose (no Docker on this machine), and the optional real
 
 | Validator | Recall | Precision | FPR | p95 ms |
 |---|---:|---:|---:|---:|
-| native 0.1.0 | 100.0% | 100.0% | 0.0% | 2.21 |
-| sql-guardrail 0.5.2 | 98.6% | 86.6% | 21.2% | 1.80 |
-| agent-sql-guard 0.2.0 | 67.9% | 86.6% | 14.5% | 1.27 |
-| krish2105/sqlguard 0.1.0 | 65.8% | 91.4% | 8.6% | 1.24 |
+| native 0.1.0 | 100.0% | 100.0% | 0.0% | 2.15 |
+| sql-guardrail 0.5.2 | 98.6% | 86.6% | 21.2% | 1.72 |
+| agent-sql-guard 0.2.0 | 67.9% | 86.6% | 14.5% | 1.26 |
+| krish2105/sqlguard 0.1.0 | 65.8% | 91.4% | 8.6% | 1.22 |
 
 The native score reflects a corpus co-developed with the engine (see RESULTS_v1.md).
 
