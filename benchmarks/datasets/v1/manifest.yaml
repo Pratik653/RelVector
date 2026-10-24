@@ -9,6 +9,7 @@ default_context:
   tenant_id: 1
 case_files:
   - cases/*.yaml
+  - generated/*.yaml
 generator:
   script: scripts/generate_corpus.py
   seed: 20261024

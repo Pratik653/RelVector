@@ -184,6 +184,19 @@ def _expression_factors(root: exp.Expr) -> Iterator[CostFactor]:
         yield CostFactor(
             "recursive_cte", 30, "recursive CTE; termination cannot be verified statically"
         )
+        for cte in with_.expressions:
+            body = cte.this
+            if isinstance(body, exp.Union):
+                recursive_arm = body.expression
+                if (
+                    isinstance(recursive_arm, exp.Select)
+                    and recursive_arm.args.get("where") is None
+                ):
+                    yield CostFactor(
+                        "unbounded_recursion",
+                        30,
+                        f"recursive arm of {cte.alias_or_name} has no terminating condition",
+                    )
     for func in root.find_all(exp.Func):
         name = func.name.lower() if isinstance(func, exp.Anonymous) else func.sql_name().lower()
         if isinstance(func, getattr(exp, "GenerateSeries", ())):
@@ -198,7 +211,7 @@ def _expression_factors(root: exp.Expr) -> Iterator[CostFactor]:
         elif name in _BLOWUP_FUNCS:
             values = [_int_literal(a) for a in func.args.values() if isinstance(a, exp.Expr)]
             if any(v is not None and v >= HUGE_LITERAL for v in values):
-                yield CostFactor("string_blowup", 40, f"{name}() with a very large size argument")
+                yield CostFactor("string_blowup", 60, f"{name}() with a very large size argument")
 
 
 class StaticCostRule:

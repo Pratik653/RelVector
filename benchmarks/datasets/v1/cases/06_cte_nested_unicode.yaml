@@ -1,0 +1,168 @@
+defaults:
+  role: support_analyst
+  dialects: [postgres, sqlite]
+  expected: deny
+  classification: malicious
+cases:
+  # ---- CTE-based bypass attempts ----
+  - id: CTE-001
+    sql: WITH x AS (SELECT p.card_number AS ref FROM payments p WHERE p.tenant_id = 1) SELECT ref FROM x
+    category: cte_bypass
+    reason: sensitive_data
+    explanation: Alias inside a CTE must not launder a denied column.
+  - id: CTE-002
+    sql: WITH a AS (SELECT p.card_number AS c FROM payments p WHERE p.tenant_id = 1), b AS (SELECT c AS d FROM a) SELECT d FROM b
+    category: cte_bypass
+    reason: sensitive_data
+    explanation: Two-hop alias chain.
+  - id: CTE-003
+    sql: WITH orders AS (SELECT e.salary FROM employees e) SELECT * FROM orders
+    category: cte_bypass
+    reason: unauthorized_table
+    explanation: CTE named after a permitted table hides an ungranted one.
+  - id: CTE-004
+    sql: WITH x AS (SELECT o.id FROM orders o WHERE o.tenant_id = 1) SELECT x.id FROM x JOIN employees e ON e.id = x.id
+    category: cte_bypass
+    reason: unauthorized_table
+    explanation: Ungranted table joined in the outer query.
+  - id: CTE-005
+    sql: WITH x AS (UPDATE orders SET status = 'x' WHERE tenant_id = 1 RETURNING id) SELECT id FROM x
+    dialects: [postgres]
+    category: cte_bypass
+    reason: write_statement
+    explanation: Data-modifying CTE.
+  - id: CTE-006
+    sql: WITH x AS (INSERT INTO orders (id, tenant_id) VALUES (5000, 1) RETURNING id) SELECT id FROM x
+    dialects: [postgres]
+    category: cte_bypass
+    reason: write_statement
+    explanation: INSERT inside a CTE.
+  - id: CTE-007
+    sql: WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n) SELECT i FROM n
+    category: cte_bypass
+    reason: cost
+    expected: review
+    classification: sensitive
+    explanation: Unbounded recursion; termination cannot be shown statically.
+  - id: CTE-008
+    sql: WITH x AS (SELECT c.id, c.email FROM customers c WHERE c.tenant_id = 1) SELECT x.id, x.email FROM x
+    category: cte_bypass
+    expected: allow
+    reason: none
+    explanation: Legitimate CTE over permitted columns.
+  - id: CTE-009
+    sql: WITH x AS (SELECT c.phone AS p FROM customers c WHERE c.tenant_id = 1) SELECT COUNT(*) FROM x
+    category: cte_bypass
+    reason: unauthorized_column
+    classification: policy_violation
+    explanation: Ungranted column referenced in a CTE even if the outer query only counts.
+
+  # ---- nested queries ----
+  - id: NST-001
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.id IN (SELECT p.order_id FROM payments p WHERE p.tenant_id = 1 AND p.card_number LIKE '4%')
+    category: nested_query
+    reason: sensitive_data
+    explanation: Denied column used inside a filter subquery.
+  - id: NST-002
+    sql: SELECT o.id, (SELECT MAX(p.iban) FROM payments p WHERE p.order_id = o.id AND p.tenant_id = 1) AS x FROM orders o WHERE o.tenant_id = 1
+    category: nested_query
+    reason: sensitive_data
+    explanation: Scalar subquery projecting a denied column.
+  - id: NST-003
+    sql: SELECT s.v FROM (SELECT p.card_number AS v FROM payments p WHERE p.tenant_id = 1) AS s
+    category: nested_query
+    reason: sensitive_data
+    explanation: Derived table.
+  - id: NST-004
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND EXISTS (SELECT 1 FROM employees e WHERE e.id = o.customer_id)
+    category: nested_query
+    reason: unauthorized_table
+    explanation: Existence test against an ungranted table is an oracle.
+  - id: NST-005
+    sql: SELECT t.n FROM (SELECT u.n FROM (SELECT COUNT(*) AS n FROM orders o WHERE o.tenant_id = 1) u) t
+    category: nested_query
+    expected: allow
+    reason: none
+    explanation: Legitimate nesting.
+  - id: NST-006
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.total_amount > (SELECT AVG(o2.total_amount) FROM orders o2 WHERE o2.tenant_id = 1)
+    category: nested_query
+    expected: allow
+    reason: none
+    explanation: Comparison with a pinned aggregate subquery.
+  - id: NST-007
+    sql: SELECT id FROM (SELECT id FROM (SELECT id FROM (SELECT id FROM (SELECT id FROM (SELECT id FROM orders WHERE tenant_id = 1) a) b) c) d) e
+    category: nested_query
+    reason: structure_limit
+    classification: policy_violation
+    explanation: Nesting deeper than the policy's max_subquery_depth (4).
+  - id: NST-008
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 UNION SELECT p.card_number FROM payments p WHERE p.tenant_id = 1
+    category: join_subquery_policy
+    reason: sensitive_data
+    explanation: Denied column smuggled through a UNION arm.
+  - id: NST-009
+    sql: SELECT o.id FROM orders o JOIN payments p ON p.order_id = o.id AND p.iban IS NOT NULL WHERE o.tenant_id = 1 AND p.tenant_id = 1
+    category: join_subquery_policy
+    reason: sensitive_data
+    classification: policy_violation
+    explanation: Denied column used in a join condition.
+  - id: NST-010
+    sql: SELECT o.id FROM orders o JOIN payments p USING (id) WHERE o.tenant_id = 1 AND p.tenant_id = 1
+    category: join_subquery_policy
+    expected: allow
+    reason: none
+    explanation: JOIN USING on a permitted column.
+
+  # ---- unicode and identifier edge cases ----
+  - id: UNI-001
+    sql: SELECT o.id FROM "orders" o WHERE o.tenant_id = 1
+    category: unicode_identifiers
+    expected: allow
+    reason: none
+    explanation: Quoted lower-case identifier is the same table.
+  - id: UNI-002
+    sql: SELECT o.id FROM "Orders" o WHERE o.tenant_id = 1
+    category: unicode_identifiers
+    reason: unauthorized_table
+    classification: policy_violation
+    expected_by_dialect: {sqlite: allow}
+    explanation: >-
+      PostgreSQL treats quoted "Orders" as a different (unknown) table; SQLite identifiers are
+      case-insensitive, so it is the same table there.
+  - id: UNI-003
+    sql: SELECT o.id FROM оrders o WHERE o.tenant_id = 1
+    category: unicode_identifiers
+    reason: unauthorized_table
+    explanation: Cyrillic 'о' homoglyph makes a different identifier.
+  - id: UNI-004
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status = 'Zoë 😀'
+    category: unicode_identifiers
+    expected: allow
+    reason: none
+    explanation: Non-ASCII string literal.
+  - id: UNI-005
+    sql: "SELECT o.id AS \"Bestellnummer ü\" FROM orders o WHERE o.tenant_id = 1"
+    category: unicode_identifiers
+    expected: allow
+    reason: none
+    explanation: Non-ASCII quoted alias.
+  - id: UNI-006
+    sql: "SELECT o.id FROM \"order s\" o WHERE o.tenant_id = 1"
+    category: unicode_identifiers
+    reason: unauthorized_table
+    classification: policy_violation
+    explanation: Quoted identifier with a space is a different table.
+  - id: UNI-007
+    sql: "SELECT c.\"EMAIL\" FROM customers c WHERE c.tenant_id = 1"
+    category: unicode_identifiers
+    reason: unresolvable
+    classification: policy_violation
+    expected_by_dialect: {sqlite: allow}
+    explanation: In PostgreSQL quoted "EMAIL" is not the column email; SQLite folds case.
+  - id: UNI-008
+    sql: "SELECT o.id FROM ORDERS o WHERE O.TENANT_ID = 1"
+    category: unicode_identifiers
+    expected: allow
+    reason: none
+    explanation: Unquoted identifiers fold to lower case.

@@ -61,10 +61,14 @@ def _conjuncts(node: exp.Expr | None) -> list[exp.Expr]:
 
 
 def _term(node: exp.Expr) -> Term | None:
-    while isinstance(node, (exp.Paren, exp.Cast, exp.TryCast)):
+    while isinstance(node, exp.Paren):
         node = node.this
     if isinstance(node, exp.Column) and node.table and not isinstance(node.this, exp.Star):
-        return ("col", node.table, node.name.lower())
+        return ("col", node.table, node.name)
+    # Casts are unwrapped only around constants. A cast of the *column* can be lossy
+    # (e.g. text ids '1' and '01' both cast to 1), so it never counts as a pin.
+    while isinstance(node, (exp.Paren, exp.Cast, exp.TryCast)):
+        node = node.this
     if isinstance(node, exp.Literal):
         return ("const", str(node.this))
     if isinstance(node, exp.Neg) and isinstance(node.this, exp.Literal):

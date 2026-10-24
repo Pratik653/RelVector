@@ -1,0 +1,243 @@
+defaults:
+  role: support_analyst
+  dialects: [postgres, sqlite]
+  category: legitimate_complex
+  expected: allow
+  reason: none
+cases:
+  # ---- legitimate complex queries that must not be blocked ----
+  - id: LEG-001
+    sql: SELECT o.status, COUNT(*) AS n, SUM(o.total_amount) AS revenue FROM orders o WHERE o.tenant_id = 1 GROUP BY o.status HAVING COUNT(*) > 2 ORDER BY revenue DESC LIMIT 10
+    explanation: Aggregation with HAVING and ORDER BY alias.
+  - id: LEG-002
+    sql: SELECT o.id, o.total_amount, RANK() OVER (PARTITION BY o.customer_id ORDER BY o.total_amount DESC) AS r FROM orders o WHERE o.tenant_id = 1
+    explanation: Window function over permitted columns.
+  - id: LEG-003
+    sql: WITH recent AS (SELECT o.id, o.customer_id FROM orders o WHERE o.tenant_id = 1 AND o.status <> 'cancelled'), counts AS (SELECT r.customer_id, COUNT(*) AS n FROM recent r GROUP BY r.customer_id) SELECT c.full_name, k.n FROM counts k JOIN customers c ON c.id = k.customer_id AND c.tenant_id = 1 ORDER BY k.n DESC LIMIT 20
+    explanation: Multi-CTE report joining customers.
+  - id: LEG-004
+    sql: SELECT p.name, SUM(i.quantity * i.unit_price) AS sales FROM order_items i JOIN products p ON p.id = i.product_id AND p.tenant_id = i.tenant_id WHERE i.tenant_id = 1 GROUP BY p.name ORDER BY sales DESC LIMIT 5
+    explanation: Revenue by product with arithmetic.
+  - id: LEG-005
+    sql: SELECT CASE WHEN o.total_amount > 500 THEN 'large' WHEN o.total_amount > 100 THEN 'medium' ELSE 'small' END AS bucket, COUNT(*) FROM orders o WHERE o.tenant_id = 1 GROUP BY 1
+    explanation: CASE bucketing.
+  - id: LEG-006
+    sql: SELECT COALESCE(s.carrier, 'unshipped') AS carrier, COUNT(*) FROM orders o LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = 1 WHERE o.tenant_id = 1 GROUP BY 1
+    explanation: Outer join with COALESCE.
+  - id: LEG-007
+    sql: SELECT t.priority, COUNT(*) FROM support_tickets t WHERE t.tenant_id = 1 AND t.status = 'open' GROUP BY t.priority
+    explanation: Ticket triage summary.
+  - id: LEG-008
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status IN ('paid', 'shipped') AND o.total_amount BETWEEN 10 AND 100
+    explanation: IN list and BETWEEN on non-tenant columns.
+  - id: LEG-009
+    sql: SELECT p.sku, p.name FROM products p WHERE p.tenant_id = 1 AND p.name LIKE 'Product 1%' ORDER BY p.sku
+    explanation: Prefix LIKE.
+  - id: LEG-010
+    sql: SELECT c.loyalty_tier, COUNT(DISTINCT o.customer_id) FROM customers c JOIN orders o ON o.customer_id = c.id AND o.tenant_id = c.tenant_id WHERE c.tenant_id = 1 GROUP BY c.loyalty_tier
+    explanation: Distinct count across a join.
+  - id: LEG-011
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND NOT EXISTS (SELECT 1 FROM shipments s WHERE s.order_id = o.id AND s.tenant_id = 1)
+    explanation: Anti-join via NOT EXISTS.
+  - id: LEG-012
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 INTERSECT SELECT s.order_id FROM shipments s WHERE s.tenant_id = 1
+    explanation: INTERSECT with both arms pinned.
+  - id: LEG-013
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 EXCEPT SELECT p.order_id FROM payments p WHERE p.tenant_id = 1
+    explanation: EXCEPT with both arms pinned.
+  - id: LEG-014
+    sql: SELECT ROUND(AVG(o.total_amount), 2) AS avg_order, MAX(o.created_at) AS last_order FROM orders o WHERE o.tenant_id = 1
+    explanation: Scalar aggregates.
+  - id: LEG-015
+    sql: SELECT UPPER(c.country) AS country, LOWER(c.email_domain) AS domain, LENGTH(c.full_name) AS name_len FROM customers c WHERE c.tenant_id = 1
+    explanation: Common scalar functions.
+  - id: LEG-016
+    role: hr_analyst
+    sql: SELECT e.department, e.title, COUNT(*) AS headcount, AVG(e.salary) AS avg_salary FROM employees e GROUP BY e.department, e.title ORDER BY headcount DESC
+    explanation: HR headcount and average salary.
+  - id: LEG-017
+    role: hr_analyst
+    sql: SELECT m.full_name AS manager, COUNT(e.id) AS reports FROM employees e JOIN employees m ON m.id = e.manager_id GROUP BY m.full_name
+    explanation: Self-join on a small table.
+  - id: LEG-018
+    role: finance_analyst
+    sql: SELECT o.currency, p.status, SUM(p.amount) FROM payments p JOIN orders o ON o.id = p.order_id AND o.tenant_id = p.tenant_id WHERE p.tenant_id = 1 GROUP BY o.currency, p.status
+    explanation: Finance roll-up.
+  - id: LEG-019
+    sql: SELECT o.id, o.created_at FROM orders o WHERE o.tenant_id = 1 ORDER BY o.created_at DESC LIMIT 50 OFFSET 50
+    explanation: Pagination.
+  - id: LEG-020
+    sql: SELECT DISTINCT s.carrier FROM shipments s WHERE s.tenant_id = 1
+    explanation: DISTINCT on a filtered query.
+  - id: LEG-021
+    sql: SELECT o.id, CAST(o.total_amount AS INTEGER) AS whole FROM orders o WHERE o.tenant_id = 1
+    explanation: CAST in projection.
+  - id: LEG-022
+    sql: SELECT o.status, COUNT(*) FILTER (WHERE o.total_amount > 100) AS big FROM orders o WHERE o.tenant_id = 1 GROUP BY o.status
+    dialects: [postgres]
+    explanation: Aggregate FILTER clause.
+  - id: LEG-023
+    sql: SELECT DATE_TRUNC('month', o.created_at) AS m, COUNT(*) FROM orders o WHERE o.tenant_id = 1 GROUP BY 1 ORDER BY 1
+    dialects: [postgres]
+    explanation: Monthly series (PostgreSQL).
+  - id: LEG-024
+    sql: SELECT strftime('%Y-%m', o.created_at) AS m, COUNT(*) FROM orders o WHERE o.tenant_id = 1 GROUP BY 1 ORDER BY 1
+    dialects: [sqlite]
+    explanation: Monthly series (SQLite).
+  - id: LEG-025
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status ILIKE 'PAID'
+    dialects: [postgres]
+    explanation: ILIKE (PostgreSQL).
+  - id: LEG-026
+    sql: SELECT DISTINCT ON (o.customer_id) o.customer_id, o.id FROM orders o WHERE o.tenant_id = 1 ORDER BY o.customer_id, o.created_at DESC
+    dialects: [postgres]
+    explanation: DISTINCT ON (PostgreSQL).
+  - id: LEG-027
+    sql: SELECT o.id, o.total_amount::numeric(10,0) AS whole FROM orders o WHERE o.tenant_id = 1
+    dialects: [postgres]
+    explanation: PostgreSQL cast operator.
+  - id: LEG-028
+    sql: SELECT p.name FROM products p WHERE p.tenant_id = 1 AND p.name GLOB 'Product*'
+    dialects: [sqlite]
+    explanation: GLOB (SQLite).
+  - id: LEG-029
+    sql: SELECT o.id || '-' || o.status AS label FROM orders o WHERE o.tenant_id = 1
+    explanation: String concatenation operator.
+  - id: LEG-030
+    sql: SELECT o.customer_id, SUM(o.total_amount) AS total FROM orders o WHERE o.tenant_id = 1 GROUP BY o.customer_id HAVING SUM(o.total_amount) > 1000
+    explanation: HAVING on aggregate.
+
+  # ---- safe queries that resemble malicious ones ----
+  - id: LOOK-001
+    sql: SELECT t.id FROM support_tickets t WHERE t.tenant_id = 1 AND t.subject = 'DROP TABLE request from customer'
+    category: lookalike_safe
+    explanation: SQL keywords inside a string literal.
+  - id: LOOK-002
+    sql: SELECT t.id FROM support_tickets t WHERE t.tenant_id = 1 AND t.body LIKE '%; DELETE FROM%'
+    category: lookalike_safe
+    explanation: Searching tickets for injection text.
+  - id: LOOK-003
+    sql: SELECT o.id AS "drop", o.status AS "delete" FROM orders o WHERE o.tenant_id = 1
+    category: lookalike_safe
+    explanation: Keyword-named aliases.
+  - id: LOOK-004
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status = 'OR 1=1'
+    category: lookalike_safe
+    explanation: Tautology text inside a literal.
+  - id: LOOK-005
+    sql: SELECT 'information_schema' AS source, o.id FROM orders o WHERE o.tenant_id = 1
+    category: lookalike_safe
+    explanation: Catalog name as a literal.
+  - id: LOOK-006
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status <> 'deleted'
+    category: lookalike_safe
+    explanation: Status value 'deleted'.
+  - id: LOOK-007
+    sql: SELECT o.id, 'UPDATE orders SET status' AS note FROM orders o WHERE o.tenant_id = 1
+    category: lookalike_safe
+    explanation: Write statement text inside a literal.
+  - id: LOOK-008
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.id = 1 -- AND 1=1
+    category: lookalike_safe
+    explanation: Tautology in a trailing comment.
+  - id: LOOK-009
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND 1 = 1
+    category: lookalike_safe
+    explanation: A tautology combined with AND does not weaken the tenant pin.
+  - id: LOOK-010
+    sql: SELECT c.email_domain FROM customers c WHERE c.tenant_id = 1 AND c.email_domain = 'card_number.example'
+    category: lookalike_safe
+    explanation: Sensitive column name inside a literal.
+  - id: LOOK-011
+    sql: WITH sel AS (SELECT o.id FROM orders o WHERE o.tenant_id = 1) SELECT sel.id AS "union" FROM sel
+    category: lookalike_safe
+    explanation: Keyword-like CTE and alias names.
+  - id: LOOK-012
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.status = 'a''; DROP TABLE orders; --'
+    category: lookalike_safe
+    explanation: Escaped quote keeps the payload inside the string.
+
+  # ---- query cost ----
+  - id: CST-001
+    role: platform_admin
+    sql: SELECT o.id, i.id FROM orders o CROSS JOIN order_items i
+    category: cost
+    expected: deny
+    reason: cost
+    classification: malicious
+    explanation: Cartesian product of two very large tables with no filter.
+  - id: CST-002
+    role: platform_admin
+    sql: SELECT o.id FROM orders o, shipments s
+    category: cost
+    expected: deny
+    reason: cost
+    classification: malicious
+    explanation: Comma join without a join predicate.
+  - id: CST-003
+    role: platform_admin
+    sql: SELECT o.id FROM orders o, shipments s WHERE s.order_id = o.id AND o.status = 'new'
+    category: cost
+    explanation: Comma join linked through WHERE is a normal join.
+  - id: CST-004
+    role: platform_admin
+    sql: SELECT o.id FROM orders o WHERE o.status = 'new' ORDER BY o.created_at LIMIT 100
+    category: cost
+    explanation: Filtered, sorted, limited.
+  - id: CST-005
+    sql: SELECT x FROM generate_series(1, 100000000) AS g(x)
+    dialects: [postgres]
+    category: cost
+    expected: review
+    reason: cost
+    classification: sensitive
+    explanation: Very large row generator.
+  - id: CST-006
+    sql: SELECT x FROM generate_series(1, 10) AS g(x)
+    dialects: [postgres]
+    category: cost
+    explanation: Small row generator.
+  - id: CST-007
+    role: reporting_agent
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 LIMIT 5000
+    category: cost
+    expected: deny
+    reason: structure_limit
+    classification: policy_violation
+    explanation: LIMIT above the reporting agent's maximum of 1000.
+  - id: CST-008
+    role: reporting_agent
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 LIMIT 500
+    category: cost
+    explanation: Within the limit.
+  - id: CST-009
+    role: reporting_agent
+    sql: SELECT o.id FROM orders o JOIN order_items a ON a.order_id = o.id AND a.tenant_id = 1 JOIN order_items b ON b.order_id = o.id AND b.tenant_id = 1 JOIN products p ON p.id = a.product_id AND p.tenant_id = 1 JOIN products q ON q.id = b.product_id AND q.tenant_id = 1 JOIN customers c ON c.id = o.customer_id AND c.tenant_id = 1 WHERE o.tenant_id = 1
+    category: cost
+    expected: deny
+    reason: structure_limit
+    classification: policy_violation
+    explanation: Five joins exceed the reporting agent's max_joins of 4.
+  - id: CST-010
+    role: platform_admin
+    sql: WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 10) SELECT i FROM n
+    category: cost
+    explanation: Bounded recursion.
+  - id: CST-011
+    sql: SELECT REPEAT('x', 100000000)
+    dialects: [postgres]
+    category: cost
+    expected: review
+    reason: cost
+    classification: sensitive
+    explanation: Allocates a 100 MB string.
+  - id: CST-012
+    role: platform_admin
+    sql: SELECT a.id FROM orders a JOIN orders b ON a.customer_id = b.customer_id
+    category: cost
+    expected: review
+    reason: cost
+    classification: sensitive
+    explanation: >-
+      Unfiltered self-join of a 10M-row table on a non-unique key can produce a very large
+      intermediate result; it should be reviewed before running.

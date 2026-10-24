@@ -322,7 +322,9 @@ def _json_path(column: exp.Column) -> tuple[str, ...] | None:
 
 
 def _table_name(table: exp.Table) -> tuple[str, str | None]:
-    return table.name.lower(), (table.db.lower() if table.db else None)
+    # Names are already normalised per dialect by qualify(); lower-casing again would
+    # erase the case of quoted identifiers that PostgreSQL treats as distinct.
+    return table.name, (table.db or None)
 
 
 def _iter_scope_columns(scope: Scope) -> Iterator[exp.Column]:
@@ -532,7 +534,7 @@ def _record_column(
     if isinstance(column.this, exp.Star):
         return  # handled by star expansion
     alias = column.table
-    name = column.name.lower()
+    name = column.name  # normalised by qualify()
     if not alias:
         # An unqualified name the qualifier could not attribute. It may be a select-list
         # alias (ORDER BY total); those are harmless and resolved here.

@@ -1,0 +1,167 @@
+defaults:
+  role: support_analyst
+  dialects: [postgres, sqlite]
+  category: tenant_isolation
+  expected: deny
+  classification: policy_violation
+  reason: tenant_isolation
+cases:
+  - id: TEN-001
+    sql: SELECT o.id, o.status FROM orders o
+    explanation: No tenant filter.
+  - id: TEN-002
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 2
+    classification: malicious
+    explanation: Another tenant's id.
+  - id: TEN-003
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 OR 1 = 1
+    classification: malicious
+    explanation: Tautology in a disjunction removes the filter.
+  - id: TEN-004
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 OR o.tenant_id = 2
+    classification: malicious
+    explanation: Disjunction over two tenants.
+  - id: TEN-005
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id IN (1, 2, 3)
+    classification: malicious
+    explanation: IN-list of several tenants.
+  - id: TEN-006
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id <> 2
+    explanation: Inequality is not a pin; matches every other tenant.
+  - id: TEN-007
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id >= 1
+    explanation: Range predicate covers many tenants.
+  - id: TEN-008
+    sql: SELECT o.id FROM orders o WHERE NOT (o.tenant_id <> 1)
+    explanation: >-
+      Logically equivalent to tenant_id = 1 but the policy only accepts plain equality
+      conjuncts (fail-closed semantics).
+  - id: TEN-009
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = o.tenant_id
+    classification: malicious
+    explanation: Self-comparison is always true.
+  - id: TEN-010
+    sql: SELECT o.id FROM orders o WHERE o.status = 'paid'
+    explanation: Filter present but not on the tenant column.
+  - id: TEN-011
+    sql: SELECT o.id FROM orders o WHERE o.customer_id = 1
+    explanation: The value 1 is compared with the wrong column.
+  - id: TEN-012
+    sql: SELECT o.id, s.status FROM orders o JOIN shipments s ON s.order_id = o.id WHERE o.tenant_id = 1
+    explanation: Joined table is not pinned.
+  - id: TEN-013
+    sql: SELECT o.id, s.status FROM orders o JOIN shipments s ON s.order_id = o.id AND s.tenant_id = o.tenant_id WHERE o.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Pinned through an equality chain.
+  - id: TEN-014
+    sql: SELECT o.id, s.status FROM orders o JOIN shipments s ON s.order_id = o.id WHERE o.tenant_id = 1 AND s.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Both tables pinned directly.
+  - id: TEN-015
+    sql: SELECT o.id, s.status FROM orders o LEFT JOIN shipments s ON s.order_id = o.id AND s.tenant_id = 1 WHERE o.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Right side of a LEFT JOIN pinned in its ON clause.
+  - id: TEN-016
+    sql: SELECT o.id FROM orders o LEFT JOIN shipments s ON s.order_id = o.id AND o.tenant_id = 1 AND s.tenant_id = 1
+    explanation: An ON condition of a LEFT JOIN does not filter the preserved (left) side.
+  - id: TEN-017
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.customer_id IN (SELECT c.id FROM customers c)
+    explanation: Subquery reads customers of every tenant.
+  - id: TEN-018
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.customer_id IN (SELECT c.id FROM customers c WHERE c.tenant_id = 1)
+    expected: allow
+    reason: none
+    explanation: Subquery pinned as well.
+  - id: TEN-019
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 UNION SELECT s.id FROM shipments s
+    explanation: Second UNION arm unpinned.
+  - id: TEN-020
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 UNION ALL SELECT s.id FROM shipments s WHERE s.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Both arms pinned.
+  - id: TEN-021
+    sql: WITH x AS (SELECT o.id, o.tenant_id FROM orders o) SELECT x.id FROM x WHERE x.tenant_id = 1
+    explanation: >-
+      Policy semantics require the pin in the scope that reads the table. Semantically
+      equivalent outer filtering is not accepted (documented false-positive class).
+  - id: TEN-022
+    sql: WITH x AS (SELECT o.id FROM orders o WHERE o.tenant_id = 1) SELECT x.id FROM x
+    expected: allow
+    reason: none
+    explanation: Pinned inside the CTE.
+  - id: TEN-023
+    sql: SELECT o.id, (SELECT COUNT(*) FROM shipments s WHERE s.order_id = o.id) AS n FROM orders o WHERE o.tenant_id = 1
+    explanation: Correlated scalar subquery reads shipments without a pin.
+  - id: TEN-024
+    sql: SELECT o.id, (SELECT COUNT(*) FROM shipments s WHERE s.order_id = o.id AND s.tenant_id = 1) AS n FROM orders o WHERE o.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Correlated subquery pinned.
+  - id: TEN-025
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = :tenant_id
+    dialects: [postgres]
+    expected: allow
+    reason: none
+    explanation: Approved bind parameter filled by the application.
+  - id: TEN-026
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = :other_tenant
+    dialects: [postgres]
+    explanation: Unknown bind parameter is not trusted.
+  - id: TEN-027
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = '1'
+    expected: allow
+    reason: none
+    explanation: String literal of the caller's tenant id.
+  - id: TEN-028
+    sql: SELECT o.id FROM orders o WHERE (o.tenant_id = 1) AND (o.status = 'paid' OR o.status = 'new')
+    expected: allow
+    reason: none
+    explanation: OR inside a separate conjunct does not affect the pin.
+  - id: TEN-029
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND o.tenant_id = 2
+    expected: allow
+    reason: none
+    explanation: Contradictory filter returns no rows; never leaks another tenant.
+  - id: TEN-030
+    sql: SELECT o.id FROM orders o CROSS JOIN customers c WHERE o.tenant_id = 1
+    explanation: Cross-joined table unpinned.
+  - id: TEN-031
+    sql: SELECT a.id FROM orders a JOIN orders b ON b.id = a.id WHERE a.tenant_id = 1
+    classification: malicious
+    explanation: Self-join where only one alias is pinned.
+  - id: TEN-032
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1 AND EXISTS (SELECT 1 FROM payments p WHERE p.order_id = o.id)
+    explanation: EXISTS subquery reads payments unpinned.
+  - id: TEN-033
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1
+    context: {tenant_id: 2}
+    classification: malicious
+    explanation: Same SQL, different trusted tenant context; tenant 1 is now someone else.
+  - id: TEN-034
+    sql: SELECT o.id FROM orders o WHERE o.tenant_id = 1
+    context: {tenant_id: null}
+    explanation: No tenant context supplied by the application; fail closed.
+  - id: TEN-035
+    role: warehouse_analyst
+    sql: SELECT w.name FROM warehouses w
+    expected: allow
+    reason: none
+    explanation: Global (non-tenant) tables need no pin.
+  - id: TEN-036
+    role: platform_admin
+    sql: SELECT o.tenant_id, COUNT(*) FROM orders o GROUP BY o.tenant_id
+    expected: allow
+    reason: none
+    explanation: Platform admins are not tenant-scoped.
+  - id: TEN-037
+    sql: SELECT o.id FROM orders o WHERE CAST(o.tenant_id AS TEXT) = '1'
+    explanation: A cast of the tenant column can be lossy, so it is not accepted as a pin (only plain column equality counts).
+  - id: TEN-038
+    sql: SELECT o.id FROM orders o JOIN customers c ON c.id = o.customer_id AND c.tenant_id = o.tenant_id WHERE c.tenant_id = 1
+    expected: allow
+    reason: none
+    explanation: Pin propagates from customers to orders through the join equality.

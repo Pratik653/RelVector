@@ -99,6 +99,8 @@ ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLW
 "src/sqlguard_ninja/benchmarking/fixtures.py" = ["S311"]
 "examples/**" = ["S", "T201"]
 "scripts/**" = ["S603", "S607", "T201"]
+# The corpus generator builds SQL strings as *test data*; it never executes them.
+"scripts/generate_corpus.py" = ["S608", "E501"]
 
 [tool.mypy]
 python_version = "3.11"
