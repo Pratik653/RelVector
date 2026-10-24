@@ -1,0 +1,129 @@
+# Architecture decision records
+
+Each record states the context, the decision, and its consequences. Superseded decisions stay in
+the file, marked as superseded.
+
+---
+
+## ADR-001 — Foundation: standalone package on sqlglot, with adapters for existing guards (Option A + C)
+
+**Context.** Research ([COMPETITIVE_ANALYSIS.md](../research/COMPETITIVE_ANALYSIS.md)) found three
+small but competent guards. None models roles, data classification, review workflows, or agent
+integration. Two of them cannot be installed together (import-name collision, incompatible
+sqlglot pins).
+
+**Options considered.**
+
+* *B — extend one existing guard.* sql-guardrail is the strongest candidate. But its policy model
+  has no roles or labels, and it deliberately ignores dialects. Adding both would mean rewriting
+  its core and its public API, which is a fork in all but name. The maintainer has not been
+  consulted, and a fork would split a 5-star project's small community.
+* *D — fork.* Rejected for the same reason. Licences would allow it.
+* *A — standalone on sqlglot.* sqlglot already provides parsing, dialects, scope traversal and
+  column qualification. The policy layer on top is where the domain logic lives.
+* *C — compatibility layer.* Valuable for **benchmarking**, not for enforcement. Running several
+  guards in the request path adds latency and gives inconsistent explanations.
+
+**Decision.** Option A for the enforcement engine, built on sqlglot's `qualify` and
+`traverse_scope`. Option C for the benchmark harness only: external guards are evaluated through
+adapters, and users can run them alongside the native engine.
+
+**Consequences.** We own the correctness of the policy layer, so the benchmark corpus must not be
+tuned to our engine (see ADR-006). We stay compatible with sqlglot's release cadence by pinning to
+one major version (`>=30,<31`).
+
+## ADR-002 — Policy model: schema catalog + classification labels + roles
+
+**Decision.** A policy file (YAML/JSON, `version: 1`, validated by Pydantic) declares:
+
+* `catalog`: tables, columns, optional tenant column, row estimates, JSON field labels, and less
+  sensitive `alternatives` for a column;
+* `labels`: classification labels (`personal_identifier`, `contact`, `financial`, `hr`,
+  `special_category`, ...) with sensitivity and masking advice;
+* `roles`: table grants, column grants, and label rules (`allow`, `aggregate_only`, `review`,
+  `deny`).
+
+Precedence, most specific first: **explicit column rule → label rule → role default**. Labels come
+only from configuration. Column names are never used to infer sensitivity at enforcement time.
+A heuristic suggester exists (`sqlninja policy suggest`) but it writes *suggestions for a human*,
+not policy.
+
+**Consequences.** A guard with a schema can expand `SELECT *` exactly and attribute every column
+to its base table. Unknown tables and unattributable columns are handled conservatively
+(`deny` by default, `review` if configured).
+
+## ADR-003 — Decision model: findings → decision; evaluation separate from authorization
+
+**Decision.** Rules emit `Finding`s (rule id, category, severity, action ∈ {deny, review, warn},
+safe-to-disclose message, internal detail, remediation). The guard combines them into a
+`Decision` ∈ {ALLOW, REVIEW, DENY}: any deny → DENY; else any review → REVIEW; else ALLOW.
+
+Execution is authorized by a separate `SQLCheckpoint` according to an `EnforcementMode`:
+
+| Mode | DENY | REVIEW | ALLOW |
+|---|---|---|---|
+| `block` | not executed | not executed | executed |
+| `review` | not executed | executed only with an approval bound to the SQL's SHA-256 and trace id | executed |
+| `audit` | executed, `enforced=False` recorded | executed, recorded | executed |
+
+The role and tenant come from a server-side `RequestContext`. They are never taken from tool
+arguments, SQL comments or model output.
+
+## ADR-004 — External validators run in isolated subprocess workers
+
+**Context.** Import and dependency conflicts (COMPETITIVE_ANALYSIS §2).
+
+**Decision.** An adapter protocol (`BenchmarkAdapter.evaluate(case) -> AdapterVerdict`) has three
+implementations:
+
+1. `native` — in-process SQLGuard Ninja;
+2. `callable` — any user function `module:function` taking `(sql, dialect, case)`;
+3. `subprocess` — a worker script executed by *another Python interpreter* (one virtual environment
+   per external tool), speaking JSON Lines over stdin/stdout.
+
+Workers for sql-guardrail, agent-sql-guard and krish2105/sqlguard ship in
+`sqlguard_ninja/benchmarking/workers/`. `scripts/setup_external_adapters.py` creates pinned venvs.
+
+**Consequences.** Latency for subprocess adapters is measured *inside the worker*, so IPC overhead
+does not distort comparisons. Each external adapter states which case categories its policy
+translation can express. Reports show results both on all cases and on those within declared
+capability.
+
+## ADR-005 — No rewriting of SQL in the enforcement path
+
+**Decision.** The guard validates the exact string that will be executed. It never injects LIMITs
+or rewrites predicates. Remediation text may *suggest* changes. Rewriting would mean the validated
+string and the executed string differ, which is a known bypass class.
+
+## ADR-006 — Benchmark labels are tool-independent
+
+**Decision.** Each case records the *ideal* outcome under the policy semantics (`allow`, `deny`,
+`review`), a binary security label, and a tool-agnostic reason code. Cases are not relabelled
+because the native engine disagrees: that disagreement is a reported false positive or false
+negative. Generated cases use a documented, seeded generator. Safe cases are validated by executing
+them against the fixture database; unsafe cases are compiled against it where the engine can
+compile them without executing them.
+
+## ADR-007 — PostgreSQL plan inspection is gated
+
+**Decision.** `PostgresPlanInspector` only runs `EXPLAIN (FORMAT JSON)`, never `ANALYZE`, and only
+on statements the guard has already ALLOWed. It runs inside a `READ ONLY` transaction with
+`SET LOCAL statement_timeout`, rolls back, and is documented to require a low-privilege role.
+Planning can still evaluate immutable functions, which is why the guard's function policy runs
+first.
+
+## ADR-008 — Minimal core dependencies
+
+**Decision.** Core: `sqlglot`, `pydantic`, `PyYAML`. CLI uses `argparse` (no Click/Typer).
+Extras: `langchain`, `langgraph`, `fastapi`, `postgres` (`psycopg`), `dev`.
+
+## ADR-009 — Licence: Apache-2.0
+
+Apache-2.0 provides an explicit patent grant, which matters to enterprise adopters. It is
+compatible with all dependencies we use (MIT, BSD, Apache-2.0). No third-party code is vendored.
+
+## ADR-010 — Read-only scope for v0.1
+
+**Decision.** v0.1 validates read-only workloads only. All writes are denied. Supporting governed
+writes (UPDATE/DELETE with mandatory tenant predicates) is on the roadmap. Doing it properly needs
+its own corpus and threat analysis.

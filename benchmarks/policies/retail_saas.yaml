@@ -1,0 +1,259 @@
+# Benchmark policy for the synthetic multi-tenant retail SaaS schema.
+# All data described here is synthetic. Classification labels are assigned explicitly;
+# SQLGuard Ninja never infers sensitivity from column names when enforcing.
+version: 1
+name: retail_saas
+description: Multi-tenant retail platform with support, warehouse, HR, finance and reporting roles.
+dialect: postgres
+
+labels:
+  personal_identifier:
+    description: Directly identifies a natural person (name, date of birth).
+    sensitivity: high
+    masking: pseudonymise or aggregate
+  contact:
+    description: Email, phone or postal address.
+    sensitivity: high
+    masking: return the email domain or a masked value
+  location:
+    description: City-level location.
+    sensitivity: medium
+  financial:
+    description: Bank details and individual financial amounts.
+    sensitivity: high
+    masking: aggregate
+  payment_card:
+    description: Primary account number (PCI DSS scope).
+    sensitivity: critical
+    masking: use card_last4 and card_brand
+  hr:
+    description: Employment terms and performance.
+    sensitivity: high
+    masking: aggregate by department
+  government_id:
+    description: National identification numbers.
+    sensitivity: critical
+  special_category:
+    description: Health data (GDPR Art. 9) — configured explicitly for this schema.
+    sensitivity: critical
+    special_category: true
+  free_text:
+    description: Unstructured text that may contain personal data.
+    sensitivity: medium
+
+catalog:
+  default_schema: public
+  tables:
+    tenants:
+      columns: {id: int, name: text, plan: text, created_at: timestamp}
+      estimated_rows: 500
+    customers:
+      tenant_column: tenant_id
+      estimated_rows: 2000000
+      columns:
+        id: {type: int, identifying: true}
+        tenant_id: int
+        full_name: {labels: [personal_identifier]}
+        email: {labels: [contact], alternatives: [email_domain]}
+        email_domain: text
+        phone: {labels: [contact]}
+        date_of_birth: {type: date, labels: [personal_identifier]}
+        country: text
+        city: {labels: [location]}
+        loyalty_tier: text
+        marketing_opt_in: boolean
+        created_at: timestamp
+        profile:
+          type: json
+          json_fields:
+            preferences.newsletter: []
+            preferences.language: []
+            health.allergies: [special_category]
+            payment.card_number: [payment_card]
+    orders:
+      tenant_column: tenant_id
+      estimated_rows: 10000000
+      columns:
+        id: {type: int, identifying: false}
+        tenant_id: int
+        customer_id: int
+        status: text
+        total_amount: numeric
+        currency: text
+        created_at: timestamp
+        shipping_address: {labels: [contact, location]}
+    order_items:
+      tenant_column: tenant_id
+      estimated_rows: 30000000
+      columns: {id: int, tenant_id: int, order_id: int, product_id: int, quantity: int, unit_price: numeric}
+    products:
+      tenant_column: tenant_id
+      estimated_rows: 50000
+      columns: {id: int, tenant_id: int, sku: text, name: text, category: text, price: numeric}
+    payments:
+      tenant_column: tenant_id
+      estimated_rows: 10000000
+      columns:
+        id: int
+        tenant_id: int
+        order_id: int
+        card_number: {labels: [payment_card], alternatives: [card_last4]}
+        card_last4: text
+        card_brand: text
+        iban: {labels: [financial]}
+        amount: numeric
+        status: text
+    shipments:
+      tenant_column: tenant_id
+      estimated_rows: 9000000
+      columns:
+        id: int
+        tenant_id: int
+        order_id: int
+        warehouse_id: int
+        carrier: text
+        tracking_number: text
+        status: text
+        shipped_at: timestamp
+        delivery_address: {labels: [contact, location]}
+    warehouses:
+      estimated_rows: 40
+      columns: {id: int, name: text, region: text}
+    employees:
+      estimated_rows: 5000
+      columns:
+        id: {type: int, identifying: true}
+        full_name: {labels: [personal_identifier]}
+        email: {labels: [contact]}
+        department: text
+        title: text
+        salary: {type: numeric, labels: [hr, financial]}
+        bank_account: {labels: [financial]}
+        national_id: {labels: [government_id]}
+        health_notes: {labels: [special_category]}
+        hire_date: date
+        manager_id: int
+        warehouse_id: int
+    support_tickets:
+      tenant_column: tenant_id
+      estimated_rows: 3000000
+      columns:
+        id: int
+        tenant_id: int
+        customer_id: int
+        subject: text
+        body: {labels: [free_text]}
+        status: text
+        priority: text
+        created_at: timestamp
+
+roles:
+  support_analyst:
+    description: Customer support. Order status yes; full payment details no.
+    tables:
+      customers: [id, tenant_id, full_name, email, email_domain, country, city, loyalty_tier, created_at, profile]
+      orders: "*"
+      order_items: "*"
+      products: "*"
+      shipments: "*"
+      support_tickets: "*"
+      payments: [id, tenant_id, order_id, card_last4, card_brand, amount, status]
+    labels:
+      personal_identifier: allow
+      contact: allow
+      location: allow
+      free_text: allow
+      payment_card: deny
+      financial: deny
+      special_category: deny
+
+  warehouse_analyst:
+    description: Shipments and stock. No HR or customer contact data.
+    tables:
+      shipments: "*"
+      warehouses: "*"
+      products: "*"
+      order_items: "*"
+      orders: [id, tenant_id, status, created_at]
+    labels:
+      location: aggregate_only
+    unlisted_label_access: deny
+
+  hr_analyst:
+    description: HR operations. Salary only in aggregate; never national ids or health notes.
+    tenant_scoped: false
+    tables:
+      employees: "*"
+      warehouses: "*"
+    labels:
+      personal_identifier: allow
+      contact: allow
+      hr: allow
+      financial: aggregate_only
+      government_id: deny
+      special_category: deny
+
+  finance_analyst:
+    description: Revenue and payments, without card numbers or customer contact details.
+    tables:
+      orders: [id, tenant_id, customer_id, status, total_amount, currency, created_at]
+      order_items: "*"
+      products: "*"
+      payments: "*"
+    labels:
+      financial: allow
+      payment_card: deny
+
+  reporting_agent:
+    description: Automated reporting. Aggregates only for anything personal.
+    tables:
+      orders: [id, tenant_id, customer_id, status, total_amount, currency, created_at]
+      order_items: "*"
+      products: "*"
+      customers: [id, tenant_id, country, city, loyalty_tier, created_at, email_domain, email]
+    labels:
+      location: aggregate_only
+      contact: deny
+    limits:
+      max_limit: 1000
+      max_joins: 4
+      max_subquery_depth: 3
+
+  platform_admin:
+    description: Internal cross-tenant operations. Sensitive classes need review.
+    tenant_scoped: false
+    tables:
+      tenants: "*"
+      customers: "*"
+      orders: "*"
+      order_items: "*"
+      products: "*"
+      payments: "*"
+      shipments: "*"
+      warehouses: "*"
+      support_tickets: "*"
+    labels:
+      personal_identifier: allow
+      contact: allow
+      location: allow
+      free_text: allow
+      financial: review
+      payment_card: deny
+      special_category: deny
+
+tenant:
+  context_key: tenant_id
+  parameter_names: [tenant_id]
+
+functions:
+  mode: denylist
+
+limits:
+  max_joins: 6
+  max_subquery_depth: 4
+  max_limit: 10000
+
+cost:
+  review_score: 50
+  deny_score: 80
+  large_table_rows: 1000000

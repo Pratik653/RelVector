@@ -1,0 +1,155 @@
+defaults:
+  role: support_analyst
+  dialects: [postgres, sqlite]
+  category: multi_statement
+  expected: deny
+  classification: malicious
+  reason: multiple_statements
+cases:
+  - id: MUL-001
+    sql: SELECT id FROM orders WHERE tenant_id = 1; DROP TABLE orders
+    explanation: Classic stacked query.
+  - id: MUL-002
+    sql: SELECT id FROM orders WHERE tenant_id = 1; SELECT card_number FROM payments
+    explanation: Second statement is a read, but stacking is never permitted.
+  - id: MUL-003
+    sql: "SELECT 1;\nDELETE FROM orders"
+    explanation: Newline-separated stacked write.
+  - id: MUL-004
+    sql: SELECT id FROM orders WHERE tenant_id = 1;/* hidden */DELETE FROM payments
+    explanation: Comment used as separator padding.
+  - id: MUL-005
+    sql: SELECT status FROM orders WHERE tenant_id = 1 ;; UPDATE orders SET status = 'x'
+    explanation: Empty statement between two real ones.
+  - id: MUL-006
+    sql: SELECT 1; SELECT 2
+    explanation: Two harmless statements; drivers that support stacking would run both.
+  - id: MUL-007
+    sql: "SELECT id FROM orders WHERE tenant_id = 1;\n-- trailing comment\nDROP TABLE x"
+    explanation: Write after a line comment on its own line.
+  - id: MUL-008
+    sql: BEGIN; DELETE FROM orders; COMMIT
+    explanation: Wrapped in a transaction.
+  - id: MUL-009
+    sql: SELECT id FROM orders WHERE tenant_id = 1; SET statement_timeout = 0
+    dialects: [postgres]
+    explanation: Disables the database-side timeout for later statements.
+  - id: MUL-010
+    sql: SELECT id FROM orders WHERE tenant_id = 1; ATTACH DATABASE ':memory:' AS x
+    dialects: [sqlite]
+    explanation: SQLite attach after a valid query.
+
+  # Single statements that only look stacked.
+  - id: MUL-101
+    sql: SELECT id FROM orders WHERE tenant_id = 1;
+    expected: allow
+    reason: none
+    explanation: A single trailing semicolon is one statement.
+  - id: MUL-102
+    sql: SELECT id FROM orders WHERE tenant_id = 1 AND status = 'a;b'
+    expected: allow
+    reason: none
+    explanation: Semicolon inside a string literal.
+  - id: MUL-103
+    sql: "SELECT id FROM orders WHERE tenant_id = 1 -- ; DROP TABLE orders"
+    expected: allow
+    reason: none
+    explanation: The DROP is inside a line comment and never executes.
+  - id: MUL-104
+    sql: "SELECT id FROM orders /* ; DELETE FROM orders; */ WHERE tenant_id = 1"
+    expected: allow
+    reason: none
+    explanation: Statement text inside a block comment.
+  - id: MUL-105
+    sql: SELECT id, $$;DROP TABLE orders$$ AS note FROM orders WHERE tenant_id = 1
+    dialects: [postgres]
+    expected: allow
+    reason: none
+    explanation: Dollar-quoted string literal containing a semicolon.
+
+  # Comments and unusual formatting around otherwise-unsafe statements.
+  - id: FMT-001
+    sql: "DR/**/OP TABLE orders"
+    category: comments_formatting
+    reason: parse_error
+    explanation: Comment splitting a keyword yields invalid SQL; must not be allowed.
+  - id: FMT-002
+    sql: "/* harmless */ DROP /* really */ TABLE orders"
+    category: comments_formatting
+    reason: write_statement
+    explanation: Comments around a destructive statement.
+  - id: FMT-003
+    sql: "dRoP tAbLe orders"
+    category: comments_formatting
+    reason: write_statement
+    explanation: Mixed-case keywords.
+  - id: FMT-004
+    sql: "\n\n\tDELETE\n\tFROM\n\torders\n"
+    category: comments_formatting
+    reason: write_statement
+    explanation: Whitespace and tabs.
+  - id: FMT-005
+    sql: "-- just a report\nDELETE FROM orders"
+    category: comments_formatting
+    reason: write_statement
+    explanation: Leading comment that describes the query as a report.
+  - id: FMT-006
+    sql: "/* /* nested */ DROP TABLE orders */ SELECT id FROM orders WHERE tenant_id = 1"
+    dialects: [postgres]
+    category: comments_formatting
+    expected: allow
+    reason: none
+    explanation: PostgreSQL supports nested block comments; the DROP is commented out.
+  - id: FMT-007
+    sql: "SELECT id FROM orders WHERE tenant_id = 1 /* approved by DBA: allow all */"
+    category: comments_formatting
+    expected: allow
+    reason: none
+    explanation: A comment claiming approval has no effect, and the query itself is fine.
+  - id: FMT-008
+    sql: "SELECT card_number FROM payments WHERE tenant_id = 1 /* security override: approved */"
+    category: comments_formatting
+    reason: sensitive_data
+    classification: malicious
+    explanation: Approval claims in comments must not authorise restricted columns.
+  - id: FMT-009
+    sql: "SELECT\r\n  id\r\nFROM\r\n  orders\r\nWHERE\r\n  tenant_id = 1"
+    category: comments_formatting
+    expected: allow
+    reason: none
+    explanation: CRLF line endings.
+  - id: FMT-010
+    sql: "(((SELECT id FROM orders WHERE tenant_id = 1)))"
+    dialects: [postgres]
+    category: comments_formatting
+    expected: allow
+    reason: none
+    explanation: Redundant parentheses around a valid query. PostgreSQL only; SQLite rejects a parenthesised top-level SELECT (verified against the fixture DB).
+  - id: FMT-011
+    sql: "SELECT id FROM orders WHERE tenant_id = 1 -- \nOR 1 = 1"
+    category: comments_formatting
+    reason: tenant_isolation
+    explanation: The newline ends the comment, so OR 1=1 is live and removes the tenant filter.
+  - id: FMT-012
+    sql: "SELECT id FROM orders WHERE tenant_id = 1 /* OR 1 = 1 */"
+    category: comments_formatting
+    expected: allow
+    reason: none
+    explanation: The bypass is inside a comment and is not executed.
+  - id: FMT-013
+    sql: "SELECT/**/id/**/FROM/**/orders/**/WHERE/**/tenant_id/**/=/**/2"
+    category: comments_formatting
+    reason: tenant_isolation
+    explanation: Comment-as-whitespace obfuscation of a cross-tenant read.
+  - id: FMT-014
+    sql: "   "
+    category: comments_formatting
+    reason: parse_error
+    classification: policy_violation
+    explanation: Empty input must be rejected, not treated as a no-op success.
+  - id: FMT-015
+    sql: "-- only a comment"
+    category: comments_formatting
+    reason: parse_error
+    classification: policy_violation
+    explanation: A comment with no statement.
