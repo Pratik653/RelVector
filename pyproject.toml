@@ -3,15 +3,15 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "sqlguard-ninja"
+name = "relvector"
 dynamic = ["version"]
-description = "Security testing, policy enforcement, agent integration, privacy analysis and CI benchmarking for LLM-generated SQL."
+description = "Schema-aware semantic indexes over existing relational databases, with source references back to the rows."
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
-authors = [{ name = "SQLGuard Ninja contributors" }]
-keywords = ["sql", "llm", "text-to-sql", "security", "guardrail", "langgraph", "langchain", "privacy", "sqlglot", "benchmark"]
+authors = [{ name = "RelVector contributors" }]
+keywords = ["sql", "semantic-search", "embeddings", "vector-index", "sqlalchemy", "rag", "database"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -20,88 +20,48 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Programming Language :: SQL",
     "Topic :: Database",
-    "Topic :: Security",
     "Typing :: Typed",
 ]
 dependencies = [
-    # sqlglot changes its AST between majors; pin to the major we test against.
-    "sqlglot>=30.0,<31.0",
-    "pydantic>=2.6,<3.0",
-    "PyYAML>=6.0",
+    "SQLAlchemy>=2.0,<3.0",
+    "numpy>=1.26",
 ]
 
 [project.optional-dependencies]
-langchain = ["langchain-core>=0.3"]
-langgraph = ["langgraph>=0.2", "langchain-core>=0.3"]
-fastapi = ["fastapi>=0.110"]
-# Official MCP Python SDK; 2.x renamed FastMCP to MCPServer.
-mcp = ["mcp>=2.3,<3"]
+# Local embedding model (pulls in PyTorch).
+local = ["sentence-transformers>=2.3"]
 postgres = ["psycopg[binary]>=3.1"]
-mysql = ["PyMySQL>=1.1"]
-# Observability (sqlguard_ninja.observability).
-otel = ["opentelemetry-api>=1.25"]
-prometheus = ["prometheus-client>=0.20"]
-# Interactive playground (sqlninja demo serve).
-demo = ["fastapi>=0.110", "uvicorn>=0.30"]
-all = ["sqlguard-ninja[langchain,langgraph,fastapi,postgres,mysql,mcp,otel,prometheus,demo]"]
+sqlguard = ["sqlguard-ninja>=0.7,<0.8"]
 dev = [
-    "sqlguard-ninja[all]",
+    "relvector[postgres,sqlguard]",
     "pytest>=8.0",
-    "pytest-cov>=5.0",
-    "hypothesis>=6.100",
-    "httpx>=0.27",
     "ruff>=0.6",
     "mypy>=1.10",
-    "types-PyYAML",
     "build>=1.2",
-    "jsonschema>=4.20",
-    "opentelemetry-sdk>=1.25",
 ]
-
-[project.scripts]
-sqlninja = "sqlguard_ninja.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/Pratik653/SQLGuard_Ninjapy"
-Documentation = "https://github.com/Pratik653/SQLGuard_Ninjapy/tree/main/docs"
-Issues = "https://github.com/Pratik653/SQLGuard_Ninjapy/issues"
+Homepage = "https://github.com/Pratik653/RelVector"
+Issues = "https://github.com/Pratik653/RelVector/issues"
+Changelog = "https://github.com/Pratik653/RelVector/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
-path = "src/sqlguard_ninja/_version.py"
+path = "src/relvector/_version.py"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/sqlguard_ninja"]
-
-# The reference corpus and policy ship inside the wheel so `builtin:v1` and
-# `builtin:retail_saas` work after `pip install` (relative layout is preserved).
-[tool.hatch.build.targets.wheel.force-include]
-"benchmarks/datasets" = "sqlguard_ninja/_data/benchmarks/datasets"
-"benchmarks/policies" = "sqlguard_ninja/_data/benchmarks/policies"
+packages = ["src/relvector"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "benchmarks", "examples", "docs", "README.md", "LICENSE", "THIRD_PARTY_NOTICES.md", "CHANGELOG.md"]
+include = ["src/relvector", "tests/relvector", "examples/relvector", "docs/relvector", "README.md", "CHANGELOG.md", "LICENSE", "THIRD_PARTY_NOTICES.md"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests/relvector"]
 addopts = "-ra --strict-markers -p no:cacheprovider --basetemp=.pytest_tmp"
 markers = [
-    "postgres: needs a PostgreSQL server (SQLNINJA_PG_DSN or pgserver)",
-    "performance: latency measurements",
-    "mysql: needs a MySQL server (SQLNINJA_MYSQL_DSN)",
-    "e2e: browser end-to-end tests (Playwright)",
+    "model: needs a locally cached sentence-transformers model (skipped otherwise)",
+    "postgres: needs a disposable PostgreSQL server (RELVECTOR_PG_DSN or pgserver; skipped otherwise)",
 ]
-filterwarnings = ["error::DeprecationWarning:sqlguard_ninja.*"]
-
-[tool.coverage.run]
-source = ["sqlguard_ninja"]
-branch = true
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = false
-exclude_also = ["if TYPE_CHECKING:", "raise NotImplementedError", "\\.\\.\\."]
 
 [tool.ruff]
 line-length = 100
@@ -113,22 +73,13 @@ ignore = ["PLR0911", "PLR0912", "PLR0913", "PLR0915", "PLR0917", "PLR2004", "PLW
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S", "PLR", "B017", "PLC0415", "E501"]
-# Synthetic fixture data: not security-relevant randomness.
-"src/sqlguard_ninja/benchmarking/fixtures.py" = ["S311"]
-"src/sqlguard_ninja/benchmarking/workers/**" = ["E402", "S102", "F821", "PGH003", "ANN"]
 "examples/**" = ["S", "T201", "PLC0415"]
-"scripts/**" = ["S603", "S607", "T201"]
-# The corpus generator builds SQL strings as *test data*; it never executes them.
-"scripts/generate_corpus.py" = ["S608", "E501"]
 
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["src/sqlguard_ninja"]
-# Workers run in other tools' environments and import those tools; type-checked there.
-exclude = ["src/sqlguard_ninja/benchmarking/workers/"]
-plugins = ["pydantic.mypy"]
+files = ["src/relvector"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain_core.*", "psycopg.*", "pgserver.*", "mcp.*", "pymysql.*", "prometheus_client.*", "opentelemetry.*", "jsonschema.*"]
+module = ["sentence_transformers.*", "sqlguard_ninja.*", "pgserver.*"]
 ignore_missing_imports = true

@@ -1,5 +1,5 @@
 name: Feature request
-description: Propose a feature, rule, adapter or benchmark category.
+description: Propose a feature (a database, relationship type, provider or store adapter).
 labels: [enhancement]
 body:
   - type: textarea

@@ -32,3 +32,9 @@ audit*.jsonl
 # Static demo build output and download cache
 /.cache/
 /site/
+
+# RelVector local indexes and example output
+*.rvindex
+*.rvindex-*
+relvector_index.sqlite*
+examples/relvector/_output/

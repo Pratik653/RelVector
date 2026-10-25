@@ -1,405 +1,150 @@
-# SQLGuard Ninja
+# RelVector
 
-**Security testing, policy enforcement, agent integration, privacy analysis and CI
-benchmarking for LLM-generated SQL.**
+**Schema-aware semantic indexes over existing relational databases.**
 
-[![CI](https://github.com/Pratik653/SQLGuard_Ninjapy/actions/workflows/ci.yml/badge.svg)](https://github.com/Pratik653/SQLGuard_Ninjapy/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/sqlguard-ninja)](https://pypi.org/project/sqlguard-ninja/)
-![Python](https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue)
-![License](https://img.shields.io/badge/license-Apache--2.0-green)
-[![Live demo](https://img.shields.io/badge/live%20demo-try%20it%20in%20your%20browser-2f5bd3)](https://pratik653.github.io/SQLGuard_Ninjapy/)
+RelVector makes selected relational data semantically searchable without migrating or
+modifying the source database. It reads your schema, follows declared foreign keys, turns each
+root row plus its related rows into deterministic, readable text, embeds it with a
+pluggable provider and stores the vectors in a persistent local index. Every search result
+points back to the exact source rows.
 
-**[Try the live demo →](https://pratik653.github.io/SQLGuard_Ninjapy/)** No login, API key or install needed. It uses a synthetic
-retail database with three roles. Everything runs in your browser (Pyodide), so your queries
-are not sent anywhere.
+RelVector does **not** convert a database into a vector database. The database stays the
+authoritative source and is only ever read.
 
-When an LLM writes SQL, the system prompt is not a security boundary. SQLGuard Ninja sits
-between the model and the database. It checks every statement against a declared policy for
-the *authenticated* caller: which tables and columns a role may use, which data classes may
-appear only in aggregates or only after human approval, and which tenant the caller belongs
-to. It records an audit trail and gives the agent an explanation it can act on.
+> Status: `0.1.0`, alpha. Tested with SQLite and PostgreSQL 16. APIs may change before 1.0.
 
-It ships with a labelled benchmark corpus (577 cases, 1,070 dialect evaluations, all internal) and a
-regression gate for CI. The same benchmark harness can evaluate other open-source guards
-side by side.
+## Install
 
-> **One layer, not the only one.** Static SQL inspection cannot guarantee database security.
-> Use a read-only least-privilege role, row-level security and statement timeouts as well.
-> See the [threat model](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/security/THREAT_MODEL.md).
-
-## What it does
-
-| Workstream | What you get | Status |
-|---|---|---|
-| **Policy engine** | Read-only enforcement, table/column grants, tenant isolation, function and catalog rules, structural limits. Built on [sqlglot](https://github.com/tobymao/sqlglot). Fails closed when analysis is incomplete. | PostgreSQL + SQLite tested |
-| **Privacy pack** | Explicit classification labels, `deny` / `aggregate_only` / `review` per role, JSON-path labels, lineage through CTEs and derived tables, small-cohort review, minimisation hints and alternatives | implemented |
-| **Agent integrations** | `SQLCheckpoint` with block / review / audit modes, hash-bound single-use approvals, retry lock-out, redacted audit events. LangChain tool, LangGraph nodes, FastAPI router | implemented |
-| **Benchmark engine** | Versioned corpus with per-file SHA-256 hashes, internal and independent tiers, metrics (recall, precision, F1, FPR, FNR with 95% Wilson intervals, exact match, throughput, latency percentiles, per category/dialect/tier), adapters for native, callable and isolated external validators, JSON, CSV and Markdown reports | implemented |
-| **Query cost** | Explainable static score; optional PostgreSQL `EXPLAIN (FORMAT JSON)` inspection, gated and read-only | implemented |
-| **CI** | Composite GitHub Action and CLI gate: security, usability, label-change and error regressions against an approved baseline | implemented |
-
-Not yet included: governed writes (all writes are denied in v0.1); benchmark cases for
-restricted functions and system catalogs (the rules exist, but the corpus does not cover
-them); dialects beyond PostgreSQL and SQLite (they parse, but are untested). Full list:
-[KNOWN_LIMITATIONS.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/KNOWN_LIMITATIONS.md).
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph App["Your application"]
-      Auth["Auth layer"] --> Ctx["RequestContext<br/>(principal, role, tenant)"]
-      LLM["LLM / agent"] -->|SQL text| CP
-      Ctx --> CP["SQLCheckpoint<br/>block / review / audit"]
-    end
-    CP --> G["Guard"]
-    G --> AN["Analyser<br/>sqlglot qualify + scopes"]
-    AN --> R1["Statement / catalog / function rules"]
-    AN --> R2["Table and column grants"]
-    AN --> R3["Privacy labels"]
-    AN --> R4["Tenant pins"]
-    AN --> R5["Limits + static cost"]
-    CP -->|authorized only| EX["Read-only executor"] --> DB[("Database<br/>grants, RLS, timeouts")]
-    CP --> AU["Audit sink<br/>hash + redacted SQL"]
-    CP -.review.-> AP["ApprovalQueue (human)"]
-    G -.ALLOW only.-> PI["PostgreSQL EXPLAIN inspector"]
-    subgraph Bench["Benchmark + CI"]
-      DS["Corpus v1"] --> RUN["Runner"] --> ADP["Adapters: native, callable,<br/>isolated external workers"]
-      RUN --> RES["Result JSON / Markdown"] --> CMP["Baseline compare"] --> GATE["GitHub Action gate"]
-    end
-```
-
-Design decisions and their trade-offs are recorded in
-[ARCHITECTURE_DECISIONS.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/architecture/ARCHITECTURE_DECISIONS.md).
-
-## Five-minute quick start
+Python 3.11+:
 
 ```bash
-python -m pip install sqlguard-ninja            # core: sqlglot, pydantic, PyYAML
-python -m pip install "sqlguard-ninja[all]"     # + LangChain, LangGraph, FastAPI, psycopg
+pip install relvector                # core: SQLAlchemy + NumPy
+pip install "relvector[local]"       # + sentence-transformers for local embeddings (pulls in PyTorch)
+pip install "relvector[postgres]"    # + psycopg 3; use postgresql+psycopg://user@host/db URLs
+pip install "relvector[sqlguard]"    # + optional SQLGuard Ninja query validation
 ```
 
-Extras: `langchain`, `langgraph`, `fastapi`, `postgres`, `all`. Python 3.11+.
+For development, use `pip install -e ".[dev]"` from a checkout.
 
-Validate a query against the bundled reference policy (`builtin:retail_saas`, a synthetic
-multi-tenant retail schema):
-
-```bash
-sqlninja validate --policy builtin:retail_saas --role support_analyst --tenant 1   --sql "SELECT o.id FROM orders o WHERE o.tenant_id = 1 OR 1 = 1"
-```
-
-```
-DENY:
-  [deny] tenant.missing_predicate: Every read of table 'orders' must filter on the caller's tenant. Suggestion: Add `o.tenant_id = :tenant_id` to the WHERE clause of the scope that reads this table.
-```
-
-Exit codes: 0 allow, 1 deny, 3 review, 2 usage error.
-
-Run the bundled benchmark corpus, then start your own project:
-
-```bash
-sqlninja benchmark run --dataset builtin:v1 --output results/native.json
-sqlninja init my-project && cd my-project
-sqlninja benchmark run --config sqlninja.yaml
-```
-
-The runnable demos live in the repository (deterministic; no API key needed):
-
-```bash
-git clone https://github.com/Pratik653/SQLGuard_Ninjapy.git && cd SQLGuard_Ninjapy
-python -m pip install -e ".[all]"
-python examples/sdk/quickstart.py
-python examples/sqlite/text_to_sql_demo.py
-python examples/langgraph/sql_agent_demo.py
-```
-
-## Python SDK
+## Quick start
 
 ```python
-from sqlguard_ninja import Guard, Policy
+from relvector import RelVector
 
-from sqlguard_ninja.benchmarking.builtin import resolve
+with RelVector("sqlite:///shop.db", embedding_provider="local",
+               index_path="shop.rvindex") as rv:
+    print(rv.inspect_schema().describe())        # tables, columns, PKs, foreign keys
 
-guard = Guard(Policy.from_file(resolve("builtin:retail_saas", "policy")))
-result = guard.validate(
-    "SELECT department, AVG(salary) FROM employees GROUP BY department",
-    role="hr_analyst",
-    dialect="postgres",
-)
-result.allowed  # True
-result.findings  # () - structured Finding objects with rule_id, action, message, remediation
+    rv.configure(
+        root_table="orders",                     # one semantic record per order
+        include_tables=["shipments"],            # joined via the declared foreign key
+        text_fields=["orders.status", "shipments.delay_reason"],   # embedded
+        metadata_fields=["orders.status"],       # stored and filterable, not embedded
+        exclude_fields=["customers.email"],
+        templates={
+            "orders": "Order {id} is {status}.",
+            "shipments": "Its associated shipment has a {delay_reason}.",
+        },
+    )
+    stats = rv.index(batch_size=500)
+    print(stats)   # rows, embedded, unchanged, deleted, timings, rows/s
 
-guard.validate("SELECT full_name, salary FROM employees", role="hr_analyst").explain()
-# DENY:
-#   [deny] privacy.aggregate_only: The column 'employees.salary' may only be used inside
-#   statistical aggregates (COUNT, SUM, AVG, ...), not as individual values. ...
+    for hit in rv.search("orders delayed because of transport problems", top_k=5):
+        print(hit.score, hit.source_table, hit.source_pk, hit.references)
+        print(hit.text)
 ```
 
-## LangGraph
+The record for order 1002 reads:
+`Order 1002 is delayed. Its associated shipment has a carrier capacity shortage.`
 
-```python
-from sqlguard_ninja.integrations import RequestContext, SQLCheckpoint
-from sqlguard_ninja.integrations.langgraph import (
-    CONTEXT_KEY,
-    make_execute_node,
-    make_guard_node,
-    route_after_guard,
-)
+Runnable example: [examples/relvector/orders_shipments.py](examples/relvector/orders_shipments.py)
+(`--provider hashing` runs without any model).
 
-checkpoint = SQLCheckpoint(guard, mode="block", max_denied_attempts=3)
-graph.add_node("guard", make_guard_node(checkpoint))
-graph.add_node("execute", make_execute_node(checkpoint, executor))  # re-validates
-graph.add_conditional_edges(
-    "guard", route_after_guard(3), {"execute": "execute", "revise": "generate", "end": END}
-)
+## How it works
 
-ctx = RequestContext(principal=user.id, role=user.role, tenant_id=user.tenant_id)
-app.invoke(state, config={"configurable": {CONTEXT_KEY: ctx}})  # nodes cannot alter config
-```
+| Stage | Behaviour |
+|---|---|
+| Inspect | SQLAlchemy inspector: tables, columns, primary keys, declared foreign keys. Catalog only, no rows. |
+| Map | `EntityMapping`: root table, directly related tables (FK or explicit `Include(via=...)`), `text_fields`, `metadata_fields`, `exclude_fields`. Only listed columns are ever selected. |
+| Extract | Keyset pagination on the primary key (`WHERE pk > :last ORDER BY pk LIMIT n`). Related rows are fetched per batch with `IN (...)`, one query per relation, so there are no joins and no Cartesian products. One-to-many relations are capped per parent with `ROW_NUMBER()`, the true count is reported in the text and in `truncated`. |
+| Serialise | Deterministic templates. Nulls render as "not recorded"; if a templated field is null, the record falls back to explicit `Field: value.` text instead of producing a misleading sentence. No LLM is involved. |
+| Embed | `"local"` = sentence-transformers (default `all-MiniLM-L6-v2`), `"hashing"` = dependency-free lexical hashing, or any object implementing `EmbeddingProvider`. |
+| Store | `LocalVectorStore`: one SQLite file with float32 vectors, JSON metadata and checkpoints. No pickle. Exact cosine search, streamed in bounded chunks (memory does not grow with the index). |
+| Re-index | Idempotent: vector ids are derived from the primary key, unchanged content (by hash) is not re-embedded, rows that disappeared are pruned when a run completes. Each batch commits atomically with its checkpoint; `index(resume=True)` continues an interrupted run. |
 
-More in [AGENT_INTEGRATION.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/AGENT_INTEGRATION.md): the LangChain tool (its
-schema accepts only `query`), the FastAPI router, review-mode approvals and audit sinks.
+Search results carry `vector_id`, `score`, `text`, `source_table`, `source_pk`, `metadata`,
+`references` (the related rows used, by primary key) and `truncated`. Metadata can be filtered
+exactly: `rv.search(q, filters={"orders.status": "delayed"})`.
 
-## Privacy policies
+**A high similarity score is not evidence of causation or of a fact.** It means the text of
+a record is close to the query in embedding space. Check the source rows.
 
-Sensitivity comes from labels **you** assign in the policy, never from column names, and
-access is resolved per role:
+## Safety defaults
 
-```yaml
-labels:
-  payment_card: {sensitivity: critical, masking: use card_last4 and card_brand}
-  financial:    {sensitivity: high}
-catalog:
-  tables:
-    payments:
-      tenant_column: tenant_id
-      columns:
-        card_number: {labels: [payment_card], alternatives: [card_last4]}
-        card_last4: text
-roles:
-  support_analyst:
-    tables: {payments: [id, tenant_id, card_last4, card_brand, amount, status]}
-    labels: {payment_card: deny, financial: deny}
-  hr_analyst:
-    tables: {employees: "*"}
-    labels: {hr: allow, financial: aggregate_only}   # salary only inside COUNT/SUM/AVG
-```
+* Source connections are read-only: SQLite opens with `mode=ro` (a missing file is an error,
+  never created); PostgreSQL sessions use `READ ONLY`, `REPEATABLE READ` transactions. Use a
+  read-only database role as well. If you pass your own `engine=`, these settings are yours to
+  configure.
+* Only `SELECT` statements built with SQLAlchemy Core run, with bound parameters. There is no
+  free-form SQL input.
+* Columns whose names look sensitive (email, phone, password, SSN, card number and so on) are
+  refused in `text_fields`/`metadata_fields` unless listed in `allow_sensitive`. Name heuristics
+  are incomplete: `notes` may hold anything, so review every field you map.
+* Providers that send text off the machine must declare `sends_data_externally = True` and
+  are refused unless you pass `allow_external_embeddings=True`.
+* `repr()` hides passwords in connection URLs.
+* Optional [SQLGuard Ninja](https://pypi.org/project/sqlguard-ninja/) integration validates every extraction
+  query against a policy and blocks on denial:
 
-```text
-support_analyst> SELECT p.card_number FROM payments p WHERE p.tenant_id = 1
-DENY:
-  [deny] privacy.label_denied: The column 'payments.card_number' contains classified data (payment_card) that this role may not access. Suggestion: Use column 'payments.card_last4' instead. ...
+  ```python
+  from sqlguard_ninja import Guard, Policy
+  from relvector.integrations.sqlguard import SQLGuardValidator
 
-hr_analyst> SELECT AVG(salary) FROM employees WHERE id = 7
-REVIEW:
-  [review] privacy.small_cohort: An aggregate of restricted data is filtered or grouped by an identifying column, which can reveal individual values. ...
-```
+  rv = RelVector(url, sql_validator=SQLGuardValidator(Guard(Policy.from_file("policy.yaml")),
+                                                      role="indexer"))
+  ```
 
-Labels also apply to paths inside JSON columns (`profile->'health'->>'allergies'`).
-`sqlninja policy suggest` proposes labels from column names for a human to review; those
-suggestions are never enforced. This is a technical control, not a certification of GDPR
-compliance. Full semantics: [POLICY_REFERENCE.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/POLICY_REFERENCE.md).
+  SQLGuard approval means the query is allowed for the role. It does not mean the values may
+  be embedded and stored; that decision belongs to the mapping.
 
-## Policy as code
+## Known limitations
 
-Roles can inherit (`extends`), and explicit denies cannot be relaxed by a child. Every decision
-carries the policy revision, the policy fingerprint and a decision id. Review changes before
-activating them:
-
-```bash
-sqlninja policy template multi_tenant_saas --output policy.yaml
-sqlninja policy diff old.yaml policy.yaml --fail-on-relaxation
-sqlninja policy simulate --policy old.yaml --against policy.yaml --cases cases.yaml
-sqlninja policy explain --policy policy.yaml --role support --column customers.email
-```
-
-Optional: `SQLCheckpoint(..., rewrite_tenant_filters=True)` adds missing tenant filters
-through the AST and executes only the re-validated rewrite. See
-[POLICY_AS_CODE.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/POLICY_AS_CODE.md).
-
-## MCP server
-
-Let MCP-compatible agents check SQL against your policy before running it anywhere:
-
-```bash
-python -m pip install "sqlguard-ninja[mcp]"
-sqlninja mcp --policy builtin:retail_saas --role support_analyst --tenant 1
-```
-
-The four tools are `validate_sql`, `explain_policy_decision`, `inspect_query_cost` and
-`get_policy_capabilities`. The role and tenant are fixed server-side, the server never connects
-to a database, and it exposes no execution tool. Tested with the official MCP Python SDK
-client over stdio. See [MCP_INTEGRATION.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/MCP_INTEGRATION.md).
-
-## Interactive playground
-
-**Live:** https://pratik653.github.io/SQLGuard_Ninjapy/ (GitHub Pages, static, runs in your browser).
-
-A web app on a synthetic retail database. It has:
-
-* three enforceable roles (Sales Analyst, Customer Support, Store Manager)
-* example queries, with explanations and how-to-fix hints
-* lineage, tenant-isolation demonstrations and role permissions
-* a benchmark dashboard that separates internal from independent results
-
-```bash
-python -m pip install "sqlguard-ninja[demo]"
-sqlninja demo serve          # http://127.0.0.1:8000
-```
-
-Allowed queries run in a restricted in-memory sandbox. The database itself enforces this
-with an authorizer allowlist, engine limits and a time budget. A static build
-(`scripts/build_static_demo.py`) runs the whole thing in the browser with Pyodide, with no
-server. See [DEPLOYMENT.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/DEPLOYMENT.md)
-for Docker, Compose and Kubernetes.
-
-## Observability and SARIF
-
-```bash
-python -m pip install "sqlguard-ninja[otel,prometheus]"
-sqlninja scan sql/ --policy policy.yaml --role reporting --tenant 1 --format sarif --output sqlninja.sarif
-```
-
-`Telemetry(tracer=..., metrics=GuardMetrics())` adds OpenTelemetry spans and Prometheus metrics
-to the checkpoint: decisions, findings by rule, latency, errors, resource-limit rejections and
-checkpoint outcomes. By default no signal contains SQL text, literals, request-context values,
-tenant ids or principals, and tests check this with canary values. A Grafana dashboard
-(`deploy/grafana/`) and a synthetic-traffic Prometheus/Grafana stack are included. SARIF output
-validates against the OASIS 2.1.0 schema. See [OBSERVABILITY.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/OBSERVABILITY.md).
-
-## Query cost analysis
-
-Every validation includes an explainable static score that uses the catalog's
-`estimated_rows`:
-
-```text
-platform_admin> SELECT o.id, i.id FROM orders o CROSS JOIN order_items i
-DENY:
-  [deny] cost.static_score: Estimated query cost risk is 100/100: join with i has no join condition (Cartesian product); o has an estimated 10,000,000 rows and is read without a filter; ...
-```
-
-Optionally, compare it with PostgreSQL's planner. This runs `EXPLAIN (FORMAT JSON)` only,
-never `ANALYZE`, and only on SQL the guard allowed, inside a read-only, time-limited,
-rolled-back transaction:
-
-```python
-from sqlguard_ninja.query_cost.postgres import PostgresPlanInspector
-
-report = PostgresPlanInspector(guard, lambda: psycopg.connect(READER_DSN)).inspect(
-    sql, role="support_analyst", context={"tenant_id": 1}
-)
-report.total_cost, report.plan_rows, report.static.score, report.findings
-```
-
-See [QUERY_COST.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/QUERY_COST.md) and `examples/postgresql/plan_inspection_demo.py`.
-
-## Benchmark
-
-```bash
-sqlninja benchmark run --dataset builtin:v1 --adapter native
-python scripts/setup_external_adapters.py          # (repository) isolated venvs for other tools
-sqlninja benchmark run --dataset builtin:v1 --adapter external:sql-guardrail
-sqlninja benchmark compare --baseline benchmarks/baselines/native.json --candidate results/latest.json
-```
-
-Results for corpus v1.2.0 (577 cases, 1,070 evaluations; SQLGuard Ninja 0.5.0; Windows 11,
-Python 3.11). Intervals are 95% Wilson intervals. Details, CSV and raw files:
-[RESULTS_v1.2.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/benchmarks/RESULTS_v1.2.md).
-
-| Validator | Recall (95% CI) | Precision | F1 | FPR (95% CI) | Recall / FPR within declared capability | p95 ms |
-|---|---:|---:|---:|---:|---:|---:|
-| SQLGuard Ninja 0.5.0 | 100.0% (99.4–100.0) | 100.0% | 1.000 | 0.0% (0.0–0.9) | 100.0% / 0.0% | 3.36 |
-| sql-guardrail 0.5.2 | 98.2% (96.9–99.0) | 84.7% | 0.909 | 24.8% (21.1–29.0) | 98.3% / 19.7% | 1.84 |
-| agent-sql-guard 0.2.0 | 66.8% (63.0–70.4) | 85.1% | 0.748 | 16.3% (13.2–20.0) | 89.4% / 17.7% | 1.44 |
-| krish2105/sqlguard 0.1.0 | 64.8% (61.0–68.5) | 89.4% | 0.752 | 10.7% (8.2–14.0) | 83.5% / 5.2% | 1.42 |
-
-**All of these are internal results.** The corpus was written by this project, alongside the
-engine. The native 100% shows consistency with the documented semantics, not independent
-detection quality. No independently sourced dataset exists yet ([intake rules](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/benchmarks/datasets/external/README.md),
-issue #6). Reports keep `internal` and `independent` tiers separate, and they also separate
-policy denials from unsupported-SQL denials. Methodology and bias review:
-[BENCHMARK_METHODOLOGY.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/BENCHMARK_METHODOLOGY.md),
-[BENCHMARK_BIAS_REVIEW.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/BENCHMARK_BIAS_REVIEW.md).
-
-## How it relates to existing tools
-
-SQLGuard Ninja uses **sqlglot** for parsing, dialects and scope analysis, and does not
-re-implement them. [sql-guardrail](https://github.com/nickusevich/sql-guardrail) is a
-thorough read-only validator with a tautology catch-all, which this project does not
-duplicate. [agent-sql-guard](https://github.com/sakura-sky/sql-guard) has a careful
-schema-less PII denylist. What SQLGuard Ninja adds: role- and label-based policies, the agent
-checkpoint contract, a shared benchmark with isolated adapters, planner inspection, and the
-CI gate. Full comparison: [COMPETITIVE_ANALYSIS.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/research/COMPETITIVE_ANALYSIS.md).
-
-## Security limitations
-
-* Static inspection can be wrong where sqlglot and the real database parse SQL differently.
-  Only PostgreSQL and SQLite are tested.
-* It cannot see inside views or user-defined functions, and it does not stop inference
-  across many permitted queries.
-* Cost scores and planner estimates are indicators, not guarantees.
-* v0.1 denies all writes.
-* The benchmark has no restricted-function or system-catalog cases yet. The rules exist,
-  but those two categories are not measured.
-
-Use database grants, row-level security and timeouts as the authoritative controls. See the
-[threat model](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/security/THREAT_MODEL.md), [limits of static analysis](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/security/STATIC_ANALYSIS_LIMITS.md),
-the [benchmark bias review](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/BENCHMARK_BIAS_REVIEW.md) and [KNOWN_LIMITATIONS.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/KNOWN_LIMITATIONS.md).
-
-## Roadmap
-
-Next: restricted-function and system-catalog benchmark cases (issue #5), an independent
-held-out corpus (issue #6) and public hosting of the playground. Later:
-governed writes, and database-verified SQL Server and Oracle support. Details in [ROADMAP.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/ROADMAP.md).
-
-## Links
-
-* Repository: https://github.com/Pratik653/SQLGuard_Ninjapy
-* Releases: https://github.com/Pratik653/SQLGuard_Ninjapy/releases
-* PyPI: https://pypi.org/project/sqlguard-ninja/
-* Issues: https://github.com/Pratik653/SQLGuard_Ninjapy/issues
-* Security policy: [SECURITY.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/SECURITY.md) · Contributing: [CONTRIBUTING.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/CONTRIBUTING.md)
-
-## Documentation
-
-* [Policy reference](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/POLICY_REFERENCE.md)
-* [Policy as code](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/POLICY_AS_CODE.md)
-* [MCP integration](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/MCP_INTEGRATION.md)
-* [Agent integration](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/AGENT_INTEGRATION.md)
-* [Query cost](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/QUERY_COST.md)
-* [CI integration](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/CI_INTEGRATION.md)
-* [Playground and deployment](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/DEPLOYMENT.md)
-* [Observability and SARIF](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/OBSERVABILITY.md)
-* [Database compatibility](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/DATABASE_COMPATIBILITY.md)
-* [Benchmark methodology](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/BENCHMARK_METHODOLOGY.md)
-* [Threat model](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/security/THREAT_MODEL.md)
-* [Limits of static SQL analysis and dialect support](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/security/STATIC_ANALYSIS_LIMITS.md)
-* [Benchmark bias review](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/BENCHMARK_BIAS_REVIEW.md)
-* [Architecture decisions](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/architecture/ARCHITECTURE_DECISIONS.md)
-* [Known limitations](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/KNOWN_LIMITATIONS.md) · [Roadmap](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/ROADMAP.md) · [Changelog](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/CHANGELOG.md)
-
-## Supported versions
-
-* Python 3.11, 3.12, 3.13 (CI matrix on Linux and Windows).
-* SQL dialects: **PostgreSQL** (tested against PostgreSQL 16), **SQLite**, and **MySQL 8**
-  (tested against MySQL 8.4 in CI, within the documented scope: identifier case is not folded,
-  named placeholders only). SQL Server and Oracle are parser-level **experimental**; others are
-  untested. See the [compatibility matrix](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/docs/guides/DATABASE_COMPATIBILITY.md).
+* This is a trusted-developer library. The index file contains embedded text and metadata in
+  plain form. Anyone who can read it can read that data. There is no row-level or tenant
+  isolation in the index.
+* Relationships: one hop from the root table, single-column joins. No self-references,
+  multi-hop paths or composite foreign keys yet. Composite root primary keys are supported.
+* Re-indexing is a full re-scan. There is no change-data-capture, and no triggers or timestamps
+  are used. Edits to related rows (child shipments, a parent customer) are picked up on the
+  next completed run. Rows changed during a run may be read at different moments, and the next
+  run corrects them. See
+  [how source changes reach documents](docs/relvector/architecture.md#how-source-changes-reach-semantic-documents).
+* Only one writer per entity at a time. A new run, or a resume of the same run in another
+  process, takes over the checkpoint. The displaced writer stops with `RunSupersededError` at
+  its next batch and never prunes. This is a takeover, not a lock: it doesn't stop two writers
+  from embedding the same batch, and those duplicate writes are harmless upserts.
+* Checkpoints keep primary-key types (int, str, date, datetime, time, Decimal, UUID, bytes), so
+  a resumed scan compares keys as the column does. Other key types cannot be checkpointed and
+  fail with a clear error.
+* `LocalVectorStore` search is exact and streamed: memory is bounded by
+  `search_chunk_size` (default 1024 rows) and `top_k`, but every query scans all vectors that
+  pass the filters. Latency grows linearly with index size, and there is no approximate (ANN)
+  index. See [search performance](docs/relvector/architecture.md#search-performance).
+* The hashing provider is lexical, not semantic.
+* SQLite and PostgreSQL only. Other databases are not supported.
 
 ## Development
 
 ```bash
-python -m pip install -e ".[dev]"
-ruff check src tests scripts examples && ruff format --check src tests scripts examples
+pip install -e ".[dev]"
+pytest                      # model and PostgreSQL tests skip unless available (see CONTRIBUTING.md)
+ruff check src/relvector tests/relvector examples/relvector
 mypy
-pytest                          # PostgreSQL tests run if SQLNINJA_PG_DSN is set or pgserver is installed
-python scripts/generate_corpus.py --check
 ```
 
-See [CONTRIBUTING.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/CONTRIBUTING.md). Report vulnerabilities privately per
-[SECURITY.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/SECURITY.md).
+Architecture, reuse decisions and roadmap: [docs/relvector/architecture.md](docs/relvector/architecture.md).
 
-## Licence
+## License
 
-Apache-2.0. No third-party code is vendored; dependencies and their licences are listed in
-[THIRD_PARTY_NOTICES.md](https://github.com/Pratik653/SQLGuard_Ninjapy/blob/main/THIRD_PARTY_NOTICES.md). All benchmark data is synthetic.
+Apache-2.0. See [LICENSE](LICENSE) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). This
+repository grew out of SQLGuard Ninja (same authors and licence), whose history it keeps.

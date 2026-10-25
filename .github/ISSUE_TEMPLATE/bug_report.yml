@@ -1,11 +1,11 @@
 name: Bug report
-description: Something does not work as documented (not a security bypass).
+description: Something does not work as documented (not a security vulnerability).
 labels: [bug]
 body:
   - type: markdown
     attributes:
       value: >-
-        **Security bypasses must be reported privately** (see SECURITY.md), not here.
+        **Security vulnerabilities must be reported privately** (see SECURITY.md), not here.
   - type: textarea
     id: what
     attributes:
@@ -15,12 +15,12 @@ body:
     id: repro
     attributes:
       label: Minimal reproduction
-      description: SQL, dialect, policy excerpt, role and context. Use synthetic data only.
-      render: yaml
+      description: Schema (DDL), a few synthetic rows, the mapping and the call. Synthetic data only.
+      render: python
     validations: {required: true}
   - type: input
     id: versions
     attributes:
       label: Versions
-      placeholder: sqlguard-ninja 0.1.0, sqlglot 30.24.0, Python 3.12
+      placeholder: relvector 0.1.0, SQLAlchemy 2.1.6, PostgreSQL 16 / SQLite 3.45, Python 3.12
     validations: {required: true}

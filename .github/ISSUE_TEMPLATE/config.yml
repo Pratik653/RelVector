@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Report a security vulnerability or policy bypass
-    url: https://github.com/Pratik653/SQLGuard_Ninjapy/security/advisories/new
+  - name: Report a security vulnerability
+    url: https://github.com/Pratik653/RelVector/security/advisories/new
     about: Please report privately; see SECURITY.md.
