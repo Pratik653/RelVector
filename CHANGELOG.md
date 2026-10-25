@@ -2,7 +2,7 @@
 
 All notable changes are listed here. The project follows semantic versioning once released.
 
-## 0.2.0rc1 (release candidate)
+## 0.2.0 (2026-10-25)
 
 Added (all opt-in; v0.1.0 behaviour and APIs are unchanged):
 

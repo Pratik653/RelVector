@@ -55,7 +55,7 @@ jobs:
       - run: python -m pytest -q
 
   test-core-only:
-    name: Tests without optional dependencies (no SQLGuard Ninja)
+    name: Core install only (no optional extras)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

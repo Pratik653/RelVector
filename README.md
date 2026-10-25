@@ -11,7 +11,7 @@ points back to the exact source rows.
 RelVector does **not** convert a database into a vector database. The database stays the
 authoritative source and is only ever read.
 
-> Status: `0.2.0rc1` (release candidate), alpha. Tested with SQLite and PostgreSQL 16. APIs may change before 1.0.
+> Status: `0.2.0`, alpha. Tested with SQLite and PostgreSQL 16. APIs may change before 1.0.
 
 ## Install
 
