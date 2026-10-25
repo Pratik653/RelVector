@@ -19,6 +19,12 @@ Recovery model:
   rows were deleted or no longer map). Interrupted runs never prune.
 
 This is a full re-scan ("manual re-indexing"); it is not change-data-capture.
+
+When change tracking is configured (``EntityMapping.change_tracking``), a run first records
+``MAX(tracking column)`` of every tracked table *before* scanning, and stores those values as
+the sync watermarks only when the run completes (atomically with ``finish_run``). Changes made
+while the scan runs therefore have later tracking values and are picked up by the next
+:meth:`relvector.sync.Syncer.run`. An interrupted full run leaves no usable watermarks.
 """
 
 from __future__ import annotations
@@ -27,14 +33,27 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 
 from relvector.embeddings import EmbeddingProvider
 from relvector.errors import RelVectorError
 from relvector.extraction import Extractor
-from relvector.mapping import build_record
+from relvector.mapping import ResolvedMapping, build_record
 from relvector.store import Checkpoint, VectorStore
+
+SYNC_FORMAT = 1
+
+
+def tracking_signature(resolved: ResolvedMapping) -> dict[str, Any]:
+    """What watermarks are only valid for: the tracking columns and the soft-delete column."""
+    return {"tracking": dict(resolved.tracking), "soft_delete": resolved.soft_delete}
+
+
+def capture_watermarks(extractor: Extractor) -> dict[str, Any]:
+    """``MAX(tracking column)`` per tracked table, read before a scan starts."""
+    return {t: extractor.max_value(t, c) for t, c in extractor.resolved.tracking.items()}
 
 
 @dataclass
@@ -83,7 +102,12 @@ class Indexer:
 
         owner = uuid.uuid4().hex
         previous = self.store.checkpoint(entity)
-        if resume and previous is not None and previous.status == "running":
+        prev_state = dict(previous.state or {}) if previous is not None else {}
+        signature = tracking_signature(resolved)
+        pending: dict[str, Any] | None = None
+        # An interrupted incremental sync is not a resumable full scan: start a fresh run.
+        if (resume and previous is not None and previous.status == "running"
+                and prev_state.get("mode") != "sync"):
             if previous.fingerprint != resolved.fingerprint:
                 raise RelVectorError(
                     f"cannot resume run {previous.run_id} for {entity!r}: the mapping changed "
@@ -92,13 +116,23 @@ class Indexer:
                 )
             stats = IndexStats(run_id=previous.run_id, rows=previous.processed, resumed=True)
             after = previous.last_key
+            if ({k: prev_state.get(k) for k in signature} == signature
+                    and isinstance(prev_state.get("pending_watermarks"), dict)):
+                pending = prev_state["pending_watermarks"]
             self.store.resume_run(Checkpoint(entity, stats.run_id, after, "running",
                                              stats.rows, resolved.fingerprint, owner))
         else:
             stats = IndexStats(run_id=uuid.uuid4().hex)
             after = None
+            state: dict[str, Any] | None = None
+            if resolved.tracking:
+                t0 = time.perf_counter()
+                pending = capture_watermarks(self.extractor)
+                stats.timings["extract"] += time.perf_counter() - t0
+                state = {"sync_format": SYNC_FORMAT, "mode": "full", **signature,
+                         "pending_watermarks": pending}
             self.store.start_run(Checkpoint(entity, stats.run_id, None, "running", 0,
-                                            resolved.fingerprint, owner))
+                                            resolved.fingerprint, owner, state))
 
         batches = self.extractor.iter_batches(batch_size, after)
         while True:
@@ -131,8 +165,14 @@ class Indexer:
                 progress(stats)
 
         t4 = time.perf_counter()
+        final: dict[str, Any] | None = None
+        if pending is not None:
+            final = {"sync_format": SYNC_FORMAT, "mode": "full", **signature,
+                     "watermarks": pending}
+        elif prev_state and stats.resumed:
+            final = {k: v for k, v in prev_state.items() if k != "pending_watermarks"}
         stats.deleted = self.store.finish_run(
             Checkpoint(entity, stats.run_id, None, "running", stats.rows, resolved.fingerprint,
-                       owner), prune=prune)
+                       owner, final), prune=prune)
         stats.timings["store"] += time.perf_counter() - t4
         return stats

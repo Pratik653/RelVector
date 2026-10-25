@@ -74,6 +74,13 @@ class EntityMapping:
     name: str | None = None
     version: str = "1"
     max_children: int = 20
+    # Opt-in incremental sync (see :mod:`relvector.sync`). ``change_tracking`` maps each mapped
+    # table to a column the application reliably bumps on every insert and update (e.g.
+    # ``updated_at`` or a version counter). ``soft_delete`` names a root column that is set
+    # (non-NULL) when a row is logically deleted; such rows are not indexed. Neither option
+    # changes documents of indexed rows, so neither is part of the mapping fingerprint.
+    change_tracking: Mapping[str, str] = field(default_factory=dict)
+    soft_delete: str | None = None
 
     @property
     def entity(self) -> str:
@@ -107,10 +114,25 @@ class ResolvedMapping:
     metadata_columns: tuple[str, ...]
     relations: tuple[Relation, ...]
     fingerprint: str
+    # Validated change-tracking columns ``{table: column}`` (possibly partial) and the root
+    # soft-delete column. Not part of ``fingerprint``: they never change a document.
+    tracking: Mapping[str, str] = field(default_factory=dict)
+    soft_delete: str | None = None
+    # Declared types of the root primary-key columns (used to re-type stored JSON keys).
+    primary_key_types: tuple[str, ...] = ()
 
     @property
     def entity(self) -> str:
         return self.spec.entity
+
+    @property
+    def tables(self) -> tuple[str, ...]:
+        """The root table followed by every included table."""
+        return (self.root_table, *(r.table for r in self.relations))
+
+    @property
+    def untracked_tables(self) -> tuple[str, ...]:
+        return tuple(t for t in self.tables if t not in self.tracking)
 
     @property
     def root_table(self) -> str:
@@ -218,6 +240,34 @@ def resolve(spec: EntityMapping, schema: Schema) -> ResolvedMapping:
     fingerprint = hashlib.sha256(
         json.dumps(resolved_payload, sort_keys=True, default=list).encode()
     ).hexdigest()[:16]
+
+    def check_aux(table: str, column: str, kind: str) -> None:
+        tables[table].column(column)
+        if (table, column) in excluded:
+            raise MappingError(f"{kind} column {table}.{column} is also in exclude_fields")
+        label = sensitive_label(column)
+        if label and (table, column) not in allowed_sensitive:
+            raise SensitiveFieldError(
+                f"{kind} column {table}.{column} looks sensitive ({label}); its values are "
+                "read and kept in the index checkpoint, so list it in allow_sensitive to use it"
+            )
+
+    tracking: dict[str, str] = {}
+    for tname, tcol in spec.change_tracking.items():
+        if tname not in tables:
+            raise MappingError(f"change_tracking names table {tname!r}, which is neither the "
+                               "root table nor an included table")
+        if not isinstance(tcol, str) or not tcol or "." in tcol:
+            raise MappingError(f"change_tracking for {tname!r} must be a plain column name, "
+                               f"got {tcol!r}")
+        check_aux(tname, tcol, "change-tracking")
+        tracking[tname] = tcol
+    if spec.soft_delete is not None:
+        sd_table, sd_col = _split(spec.soft_delete, root.name)
+        if sd_table != root.name:
+            raise MappingError("soft_delete must be a column of the root table "
+                               f"{root.name!r}, got {spec.soft_delete!r}")
+        check_aux(sd_table, sd_col, "soft-delete")
     return ResolvedMapping(
         spec=spec,
         primary_key=root.primary_key,
@@ -225,6 +275,9 @@ def resolve(spec: EntityMapping, schema: Schema) -> ResolvedMapping:
         metadata_columns=tuple(meta[root.name]),
         relations=relations,
         fingerprint=fingerprint,
+        tracking={t: tracking[t] for t in tables if t in tracking},
+        soft_delete=None if spec.soft_delete is None else _split(spec.soft_delete, root.name)[1],
+        primary_key_types=tuple(root.column(c).type for c in root.primary_key),
     )
 
 
@@ -346,6 +399,12 @@ def _render(row: Mapping[str, Any], table: str, pk: Sequence[str], columns: Sequ
     return " ".join(parts)
 
 
+def record_id(resolved: ResolvedMapping, pk_values: Sequence[Any]) -> str:
+    """The deterministic vector id of the root row with primary-key values ``pk_values``."""
+    return f"{resolved.entity}:" + json.dumps([jsonable(v) for v in pk_values],
+                                              separators=(",", ":"))
+
+
 def build_record(
     resolved: ResolvedMapping,
     row: Mapping[str, Any],
@@ -392,7 +451,7 @@ def build_record(
         )
 
     text = " ".join(sentences)
-    vector_id = f"{spec.entity}:" + json.dumps(list(pk.values()), separators=(",", ":"))
+    vector_id = record_id(resolved, [row[c] for c in resolved.primary_key])
     content_hash = hashlib.sha256(json.dumps(
         {"text": text, "metadata": metadata, "refs": references, "truncated": truncated,
          "mapping": resolved.fingerprint},
