@@ -38,3 +38,6 @@ audit*.jsonl
 *.rvindex-*
 relvector_index.sqlite*
 examples/relvector/_output/
+
+# Local tool state
+.claude/

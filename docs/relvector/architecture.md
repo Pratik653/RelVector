@@ -124,15 +124,74 @@ Remaining limitations:
 * **One long read.** A search holds a SQLite read snapshot for its duration. In WAL mode,
   writers are not blocked.
 
+## Store contract (v0.2)
+
+`VectorStore` (in `store.py`) is the interface every backend implements.
+
+* **Mutations.** `start_run`, `resume_run`, `write_batch` (upserts and touch-unchanged),
+  `delete_records` and `finish_run(prune=...)`. Each is owner-checked against the entity's
+  checkpoint and is atomic with the checkpoint update it carries.
+* **Checkpoint state.** `Checkpoint.state` holds typed, JSON-serialisable run and sync state,
+  such as per-table watermarks. It is committed in the same transaction as the claim that
+  writes it, so a watermark can never be durable before the index changes it describes.
+* **Reverse lookup.** `referencing(entity, table, pks)` maps related-row primary keys to the
+  documents whose stored references include them. It is backed by the `rv_refs` table,
+  maintained on every mutation and backfilled once for 0.1.0 files. Incremental sync uses it
+  to find the previous parent of a reassigned or deleted related row.
+* **Derived indexes.** `LocalVectorStore._after_commit(upserted, deleted)` runs after every
+  committed mutation, including prune. The FAISS backend uses it to stay in sync.
+* **Identity and scores.** `vector_id` is `f"{entity}:{json pk}"`. Vectors are L2-normalised
+  float32. `score` is cosine similarity, and exact ranking breaks ties by `vector_id`
+  ascending.
+
+## Measured performance (workload-specific, not guarantees)
+
+Measured on one Windows laptop (Python 3.11, NumPy 2.4, faiss-cpu 1.15.1), in-process, with
+SQLite files on local disk. Expect different numbers on other hardware and data.
+
+| Workload | Exact / full | v0.2 path | Notes |
+|---|---|---|---|
+| 20,000 orders + 29,994 shipments, 1% changed (150 order updates, 50 reassignments), `HashingEmbedding(256)`, batch 500 | full `index()` 4.39 s | `sync()` 0.367 s (about 12×) | 252 roots rebuilt, 250 embedded |
+| 50,000 clustered vectors, dim 128, 100 queries, top 10 | exact 369.8 ms/query | FAISS 3.86 ms/query (about 96×) | recall@10 1.000; nlist 894, nprobe 224, oversample 4 |
+| 50,000 random Gaussian vectors, same settings | exact 351.5 ms/query | FAISS 3.04 ms/query (about 116×) | recall@10 **0.724**; 1.000 with nprobe = nlist at 6.5 ms/query |
+
+Random high-dimensional data is close to the worst case for IVF recall. Tune `nprobe` for
+your data, and measure recall against exact search before relying on ANN results.
+
+## Optional FAISS backend (v0.2)
+
+`relvector/faiss_store.py` (`FaissVectorStore`) subclasses `LocalVectorStore`.
+* **Source of truth.** SQLite remains authoritative. `<index>.faiss` is a derived
+  `IndexIVFFlat` (inner product on normalised vectors). Each vector's FAISS id is its
+  `rv_records` rowid, which an upsert keeps.
+* **Search.** Candidates (`top_k × oversample`) are re-scored with the same float64 arithmetic
+  as exact search, so scores and tie order match; only recall is approximate.
+* **Exact fallback** applies when there are metadata filters, when one entity of a
+  multi-entity index is requested, or when the index is below `ann_min_vectors`.
+* **Crash safety.** A dirty marker is written before each SQLite commit, the change is applied
+  in memory after the commit, and the file is saved atomically at the end of each run and on
+  close.
+* **Rebuild.** On open the index is rebuilt from SQLite if the file is missing, dirty,
+  unreadable, or does not match SQLite (count, checksum, model or dimension). It is also
+  rebuilt when another connection has changed SQLite (`PRAGMA data_version`), and when it has
+  grown `retrain_growth`× past the size it was trained on.
+
+## Incremental sync (v0.2)
+
+`relvector/sync.py` (`Syncer`, reached through `RelVector.sync`). Per-table watermarks live in
+`Checkpoint.state` and are committed with each batch's index changes. The guarantees and
+limitations are listed in the README under "Incremental sync". Previous parents of
+reassigned or deleted children come from `VectorStore.referencing`, a reverse index over the
+references each record stores, maintained on every mutation.
+
 ## Roadmap (not implemented)
 
-1. **Next scalability step: sub-linear search.** Add an ANN backend (FAISS or pgvector)
-   behind `VectorStore`. Promote frequently filtered metadata fields to indexed columns so
-   filters seek instead of scanning.
-2. Multi-hop and composite-key relationships, and explicit child records as separate vectors.
-3. Incremental sync driven by `updated_at` columns or a deletion log across every mapped table.
-   CDC comes later.
-4. Parallel embedding workers behind the `Indexer` batch loop. The owner-token checkpoint
-   already gives a single committer.
+1. Metadata pre-filtering inside ANN search (per-entity or per-filter FAISS partitions), so
+   that filtered queries don't fall back to exact search.
+2. Multi-hop and composite-key relationships.
+3. A deletion feed or tombstone table for hard deletes, so that `sync()` doesn't need periodic
+   full reconciliation.
+4. Parallel embedding workers behind the batch loops; the owner-token checkpoint already
+   ensures a single committer.
 5. An opt-in remote embedding provider (`sends_data_externally = True`).
-6. A CLI (`relvector index config.yaml`) and a mapping config file format.
+6. A CLI and a mapping config file format.
