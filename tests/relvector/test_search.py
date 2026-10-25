@@ -137,3 +137,62 @@ def test_search_memory_is_bounded_by_chunk_not_index(tmp_path):
     assert hits[0].vector_id == "orders:[123]"
     assert peak < full_matrix / 5, f"peak {peak} bytes vs full matrix {full_matrix}"
     store.close()
+
+
+def test_store_contract_state_delete_and_hook(tmp_path):
+    """Shared v0.2 contract: durable typed state, owner-checked deletes, post-commit hook."""
+    import datetime as dt
+
+    from relvector import RunSupersededError
+
+    events: list[tuple[list[str], list[str]]] = []
+
+    class Hooked(LocalVectorStore):
+        def _after_commit(self, upserted, deleted):
+            events.append((list(upserted), list(deleted)))
+
+    vectors = np.eye(4, DIM, dtype=np.float32)
+    store = Hooked(tmp_path / "i.rv")
+    store.ensure_compatible("test-model", DIM)
+    wm = {"orders": [dt.datetime(2024, 5, 1, 12, tzinfo=dt.UTC), 7], "n": 1}
+    cp = Checkpoint("orders", "run", None, "running", 0, "fp", "w", wm)
+    store.start_run(cp)
+    store.write_batch([record(i) for i in range(4)], vectors, [], cp)
+    assert store.checkpoint("orders").state == wm  # types survive the round trip
+    later = Checkpoint("orders", "run", None, "running", 4, "fp", "w", {"n": 2})
+    assert store.delete_records(["orders:[1]", "orders:[1]", "nope"], later) == 1
+    assert store.checkpoint("orders").state == {"n": 2}
+    keep = Checkpoint("orders", "run", None, "running", 4, "fp", "w")  # state None keeps it
+    assert store.finish_run(keep, prune=False) == 0
+    assert store.checkpoint("orders").state == {"n": 2}
+    assert events == [([f"orders:[{i}]" for i in range(4)], []), ([], ["orders:[1]"]), ([], [])]
+    with pytest.raises(RunSupersededError):  # finished: no further owner-checked writes
+        store.delete_records(["orders:[0]"], keep)
+    assert store.count() == 3
+    store.close()
+
+
+def test_reference_lookup_tracks_mutations_and_backfills(tmp_path):
+    vectors = np.eye(3, DIM, dtype=np.float32)
+    recs = [record(i) for i in range(3)]  # record i references shipments {"id": i * 10}
+    store = build(tmp_path / "i.rv", vectors, recs)
+    assert store.referencing("orders", "shipments", [{"id": 10}, {"id": 20}, {"id": 99}]) == {
+        "orders:[1]": {"id": 1}, "orders:[2]": {"id": 2}}
+    cp = Checkpoint("orders", "run", None, "running", 3, "", "w")
+    moved = SemanticRecord(**{**recs[1].__dict__, "references": [
+        {"table": "shipments", "relation": "one_to_many", "pk": {"id": 20}}]})
+    store.write_batch([moved], vectors[1:2], [], cp)  # 1 now references shipment 20, not 10
+    assert store.referencing("orders", "shipments", [{"id": 10}]) == {}
+    assert set(store.referencing("orders", "shipments", [{"id": 20}])) == {"orders:[1]",
+                                                                          "orders:[2]"}
+    store.delete_records(["orders:[2]"], cp)
+    assert set(store.referencing("orders", "shipments", [{"id": 20}])) == {"orders:[1]"}
+    store.close()
+    with sqlite3.connect(tmp_path / "i.rv") as conn:  # simulate a 0.1.0 file: no lookup yet
+        conn.execute("DELETE FROM rv_refs")
+        conn.execute("DELETE FROM rv_meta WHERE key = 'refs_index'")
+    conn.close()
+    reopened = LocalVectorStore(tmp_path / "i.rv")
+    assert set(reopened.referencing("orders", "shipments", [{"id": 0}, {"id": 20}])) == {
+        "orders:[0]", "orders:[1]"}
+    reopened.close()

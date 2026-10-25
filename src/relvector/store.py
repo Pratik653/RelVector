@@ -55,10 +55,21 @@ class Checkpoint:
     processed: int
     fingerprint: str = ""
     owner: str = ""
+    # Opaque, JSON-serialisable run/sync state (for example incremental-sync watermarks).
+    # Values may be the key types ``encode_key`` supports, nested in dicts and lists. It is
+    # persisted atomically with the claim that writes it, so a watermark can never become
+    # durable before the index changes committed in the same call. ``None`` keeps the stored
+    # state on write_batch/delete_records/finish_run; start_run stores it as given.
+    state: Mapping[str, Any] | None = None
 
 
 class VectorStore(Protocol):
-    """Adapter interface for vector backends."""
+    """Adapter interface for vector backends.
+
+    Every mutation is owner-checked against the entity's checkpoint and is atomic with the
+    checkpoint update it carries. Vector ids are unique across entities; vectors are
+    L2-normalised, and ``score`` is cosine similarity in [-1, 1], higher is better.
+    """
 
     def ensure_compatible(self, model_id: str, dimension: int) -> None: ...
     def content_hashes(self, vector_ids: Sequence[str]) -> dict[str, str]: ...
@@ -66,6 +77,9 @@ class VectorStore(Protocol):
     def resume_run(self, checkpoint: Checkpoint) -> None: ...
     def write_batch(self, records: Sequence[SemanticRecord], vectors: Vectors,
                     unchanged_ids: Sequence[str], checkpoint: Checkpoint) -> None: ...
+    def delete_records(self, vector_ids: Sequence[str], checkpoint: Checkpoint) -> int: ...
+    def referencing(self, entity: str, table: str,
+                    pks: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]: ...
     def finish_run(self, checkpoint: Checkpoint, *, prune: bool) -> int: ...
     def checkpoint(self, entity: str) -> Checkpoint | None: ...
     def search(self, vector: Vectors, top_k: int, *, entity: str | None = None,
@@ -100,8 +114,17 @@ CREATE TABLE IF NOT EXISTS rv_checkpoints (
     processed INTEGER NOT NULL,
     updated_at TEXT NOT NULL,
     fingerprint TEXT NOT NULL DEFAULT '',
-    owner TEXT NOT NULL DEFAULT ''
+    owner TEXT NOT NULL DEFAULT '',
+    state TEXT
 );
+CREATE TABLE IF NOT EXISTS rv_refs (
+    entity TEXT NOT NULL,
+    ref_table TEXT NOT NULL,
+    ref_pk TEXT NOT NULL,
+    vector_id TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS rv_refs_lookup ON rv_refs (entity, ref_table, ref_pk);
+CREATE INDEX IF NOT EXISTS rv_refs_vector ON rv_refs (vector_id);
 """
 
 _FORMAT_VERSION = "1"
@@ -150,6 +173,34 @@ def decode_key(values: Sequence[Any]) -> list[Any]:
     return [loads[v["$t"]](v["v"]) if isinstance(v, dict) else v for v in values]
 
 
+def encode_state(state: Mapping[str, Any]) -> str:
+    """JSON for checkpoint state, keeping key types (dates, UUIDs, ...) like ``encode_key``."""
+
+    def enc(v: Any) -> Any:
+        if isinstance(v, Mapping):
+            if "$t" in v:
+                raise RelVectorError("checkpoint state dicts may not use the key '$t'")
+            return {str(k): enc(x) for k, x in v.items()}
+        if isinstance(v, list | tuple):
+            return [enc(x) for x in v]
+        return encode_key([v])[0]
+
+    return _dumps(enc(state))
+
+
+def decode_state(raw: str) -> dict[str, Any]:
+    def dec(v: Any) -> Any:
+        if isinstance(v, dict):
+            return decode_key([v])[0] if "$t" in v else {k: dec(x) for k, x in v.items()}
+        if isinstance(v, list):
+            return [dec(x) for x in v]
+        return v
+
+    out = dec(json.loads(raw))
+    assert isinstance(out, dict)
+    return out
+
+
 def _dumps(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -170,6 +221,8 @@ class LocalVectorStore:
             if col not in cols:
                 self._conn.execute(
                     f"ALTER TABLE rv_checkpoints ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+        if "state" not in cols:  # 0.1.0 index files predate checkpoint state
+            self._conn.execute("ALTER TABLE rv_checkpoints ADD COLUMN state TEXT")
         self._conn.execute("INSERT OR IGNORE INTO rv_meta VALUES ('format_version', ?)",
                            (_FORMAT_VERSION,))
         self._conn.commit()
@@ -178,6 +231,48 @@ class LocalVectorStore:
             raise IndexMismatchError(f"{self.path} uses index format {fmt}, expected "
                                      f"{_FORMAT_VERSION}")
         self._dimension = int(self._meta("dimension") or 0)
+        if self._meta("refs_index") is None:
+            self._backfill_refs()
+
+    def _backfill_refs(self) -> None:
+        """Build the reference lookup for index files written before it existed (0.1.0)."""
+        with self._conn:
+            cur = self._conn.cursor()
+            cur.execute("SELECT vector_id, entity, refs FROM rv_records")
+            while rows := cur.fetchmany(1000):
+                self._conn.executemany("INSERT INTO rv_refs VALUES (?,?,?,?)", [
+                    (entity, ref["table"], _dumps(ref["pk"]), vid)
+                    for vid, entity, refs in rows for ref in json.loads(refs)])
+            self._conn.execute("INSERT OR REPLACE INTO rv_meta VALUES ('refs_index', '1')")
+
+    def _drop_refs(self, vector_ids: Sequence[str]) -> None:
+        ids = list(vector_ids)
+        for i in range(0, len(ids), 500):
+            chunk = ids[i:i + 500]
+            self._conn.execute(
+                f"DELETE FROM rv_refs WHERE vector_id IN ({','.join('?' * len(chunk))})",  # noqa: S608
+                chunk)
+
+    def referencing(self, entity: str, table: str,
+                    pks: Sequence[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+        """Records of ``entity`` whose stored references include a row of ``table``.
+
+        ``pks`` are primary-key dicts in the same JSON-safe form the records store
+        (``mapping.jsonable`` values, e.g. ``{"id": 502}``). Returns ``{vector_id: source_pk}``.
+        Answers from the index's own provenance, so it also finds the *previous* parent of a
+        related row that was since reassigned or deleted in the source.
+        """
+        out: dict[str, dict[str, Any]] = {}
+        keys = list(dict.fromkeys(_dumps(dict(pk)) for pk in pks))
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            marks = ",".join("?" * len(chunk))
+            sql = ("SELECT DISTINCT r.vector_id, r.source_pk FROM rv_refs f "  # noqa: S608
+                   "JOIN rv_records r ON r.vector_id = f.vector_id "
+                   f"WHERE f.entity = ? AND f.ref_table = ? AND f.ref_pk IN ({marks})")
+            rows = self._conn.execute(sql, [entity, table, *chunk]).fetchall()
+            out.update((vid, json.loads(spk)) for vid, spk in rows)
+        return out
 
     def _meta(self, key: str) -> str | None:
         row = self._conn.execute("SELECT value FROM rv_meta WHERE key = ?", (key,)).fetchone()
@@ -252,14 +347,48 @@ class LocalVectorStore:
             )
             self._conn.executemany("UPDATE rv_records SET run_id = ? WHERE vector_id = ?",
                                    [(run_id, i) for i in unchanged_ids])
+            self._drop_refs([r.vector_id for r in records])
+            self._conn.executemany("INSERT INTO rv_refs VALUES (?,?,?,?)", [
+                (r.entity, ref["table"], _dumps(ref["pk"]), r.vector_id)
+                for r in records for ref in r.references])
+        self._after_commit([r.vector_id for r in records], [])
+
+    def delete_records(self, vector_ids: Sequence[str], checkpoint: Checkpoint) -> int:
+        """Delete records by id and advance the checkpoint — atomically, owner-checked.
+
+        Raises :class:`RunSupersededError` (deleting nothing) if the writer lost ownership.
+        Returns the number of records actually deleted (unknown ids are ignored).
+        """
+        ids = list(dict.fromkeys(vector_ids))
+        deleted: list[str] = []
+        with self._conn:
+            self._claim(checkpoint, "running")
+            for i in range(0, len(ids), 500):
+                chunk = ids[i:i + 500]
+                marks = ",".join("?" * len(chunk))
+                deleted.extend(r[0] for r in self._conn.execute(
+                    f"DELETE FROM rv_records WHERE vector_id IN ({marks}) "  # noqa: S608
+                    "RETURNING vector_id", chunk))
+            self._drop_refs(deleted)
+        self._after_commit([], deleted)
+        return len(deleted)
+
+    def _after_commit(self, upserted: Sequence[str], deleted: Sequence[str]) -> None:
+        """Hook called after every committed mutation (upserted / deleted vector ids).
+
+        A no-op here. Derived indexes (for example an ANN index) override it to stay in sync;
+        SQLite remains the source of truth.
+        """
 
     def _claim(self, cp: Checkpoint, status: str) -> None:
         """Compare-and-set: advance the checkpoint only if ``cp.owner`` still holds it."""
         key = None if cp.last_key is None else _dumps(encode_key(cp.last_key))
+        state = None if cp.state is None else encode_state(cp.state)
         cur = self._conn.execute(
-            "UPDATE rv_checkpoints SET last_key = ?, processed = ?, status = ?, updated_at = ? "
+            "UPDATE rv_checkpoints SET last_key = ?, processed = ?, status = ?, updated_at = ?, "
+            "state = COALESCE(?, state) "
             "WHERE entity = ? AND run_id = ? AND owner = ? AND status = 'running'",
-            (key, cp.processed, status, _now(), cp.entity, cp.run_id, cp.owner),
+            (key, cp.processed, status, _now(), state, cp.entity, cp.run_id, cp.owner),
         )
         if cur.rowcount != 1:
             raise RunSupersededError(
@@ -273,9 +402,9 @@ class LocalVectorStore:
         cp = checkpoint
         with self._conn:
             self._conn.execute(
-                "INSERT OR REPLACE INTO rv_checkpoints VALUES (?,?,?,?,?,?,?,?)",
+                "INSERT OR REPLACE INTO rv_checkpoints VALUES (?,?,?,?,?,?,?,?,?)",
                 (cp.entity, cp.run_id, None, "running", cp.processed, _now(), cp.fingerprint,
-                 cp.owner),
+                 cp.owner, None if cp.state is None else encode_state(cp.state)),
             )
 
     def resume_run(self, checkpoint: Checkpoint) -> None:
@@ -303,22 +432,25 @@ class LocalVectorStore:
         cp = checkpoint
         with self._conn:
             self._claim(Checkpoint(cp.entity, cp.run_id, None, "running", cp.processed,
-                                   cp.fingerprint, cp.owner), "completed")
-            deleted = 0
+                                   cp.fingerprint, cp.owner, cp.state), "completed")
+            deleted: list[str] = []
             if prune:
-                deleted = self._conn.execute(
-                    "DELETE FROM rv_records WHERE entity = ? AND run_id != ?",
-                    (cp.entity, cp.run_id)).rowcount
-        return deleted
+                deleted = [r[0] for r in self._conn.execute(
+                    "DELETE FROM rv_records WHERE entity = ? AND run_id != ? RETURNING vector_id",
+                    (cp.entity, cp.run_id))]
+                self._drop_refs(deleted)
+        self._after_commit([], deleted)
+        return len(deleted)
 
     def checkpoint(self, entity: str) -> Checkpoint | None:
         row = self._conn.execute(
-            "SELECT entity, run_id, last_key, status, processed, fingerprint, owner "
+            "SELECT entity, run_id, last_key, status, processed, fingerprint, owner, state "
             "FROM rv_checkpoints WHERE entity = ?", (entity,)).fetchone()
         if row is None:
             return None
         key = None if row[2] is None else decode_key(json.loads(row[2]))
-        return Checkpoint(row[0], row[1], key, row[3], row[4], row[5], row[6])
+        state = None if row[7] is None else decode_state(row[7])
+        return Checkpoint(row[0], row[1], key, row[3], row[4], row[5], row[6], state)
 
     def count(self, entity: str | None = None) -> int:
         if entity is None:
