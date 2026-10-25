@@ -17,14 +17,17 @@ from relvector.errors import (
     SchemaError,
     SensitiveFieldError,
 )
+from relvector.faiss_store import FaissVectorStore  # faiss itself is imported lazily
 from relvector.indexing import IndexStats
 from relvector.mapping import EntityMapping, Include, SemanticRecord
 from relvector.schema import Schema, inspect_schema
 from relvector.store import LocalVectorStore, SearchResult, VectorStore
+from relvector.sync import SyncStats, SyncUnavailableError
 
 __all__ = [
     "EmbeddingProvider",
     "EntityMapping",
+    "FaissVectorStore",
     "HashingEmbedding",
     "Include",
     "IndexMismatchError",
@@ -41,6 +44,8 @@ __all__ = [
     "SemanticRecord",
     "SensitiveFieldError",
     "SentenceTransformerEmbedding",
+    "SyncStats",
+    "SyncUnavailableError",
     "VectorStore",
     "__version__",
     "connect",

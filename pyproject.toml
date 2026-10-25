@@ -31,10 +31,12 @@ dependencies = [
 [project.optional-dependencies]
 # Local embedding model (pulls in PyTorch).
 local = ["sentence-transformers>=2.3"]
+# Optional approximate nearest-neighbour backend (CPU FAISS).
+faiss = ["faiss-cpu>=1.8"]
 postgres = ["psycopg[binary]>=3.1"]
 sqlguard = ["sqlguard-ninja>=0.7,<0.8"]
 dev = [
-    "relvector[postgres,sqlguard]",
+    "relvector[faiss,postgres,sqlguard]",
     "pytest>=8.0",
     "ruff>=0.6",
     "mypy>=1.10",
@@ -81,5 +83,5 @@ strict = true
 files = ["src/relvector"]
 
 [[tool.mypy.overrides]]
-module = ["sentence_transformers.*", "sqlguard_ninja.*", "pgserver.*"]
+module = ["sentence_transformers.*", "sqlguard_ninja.*", "pgserver.*", "faiss.*"]
 ignore_missing_imports = true

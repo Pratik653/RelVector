@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -17,6 +18,7 @@ from relvector.indexing import Indexer, IndexStats
 from relvector.mapping import EntityMapping, Include, ResolvedMapping, resolve
 from relvector.schema import Schema, inspect_schema
 from relvector.store import LocalVectorStore, SearchResult, VectorStore
+from relvector.sync import Lookback, Syncer, SyncStats
 
 SUPPORTED_DIALECTS = ("sqlite", "postgresql")
 
@@ -88,9 +90,15 @@ class RelVector:
                 "service; pass allow_external_embeddings=True to opt in explicitly"
             )
         if isinstance(vector_store, str):
-            if vector_store != "local":
-                raise RelVectorError(f"unknown vector store {vector_store!r}; use 'local'")
-            self.store: VectorStore = LocalVectorStore(index_path)
+            if vector_store == "local":
+                self.store: VectorStore = LocalVectorStore(index_path)
+            elif vector_store == "faiss":  # optional extra: relvector[faiss]
+                from relvector.faiss_store import FaissVectorStore  # noqa: PLC0415
+
+                self.store = FaissVectorStore(index_path)
+            else:
+                raise RelVectorError(f"unknown vector store {vector_store!r}; use 'local' or "
+                                     "'faiss'")
         else:
             self.store = vector_store
         self.db_schema = schema
@@ -131,8 +139,23 @@ class RelVector:
         name: str | None = None,
         version: str = "1",
         max_children: int = 20,
+        change_tracking: Mapping[str, str] | None = None,
+        soft_delete: str | None = None,
     ) -> ResolvedMapping:
-        """Set the entity mapping (pass an :class:`EntityMapping` or keyword arguments)."""
+        """Set the entity mapping (pass an :class:`EntityMapping` or keyword arguments).
+
+        ``change_tracking`` (``{table: column}``, e.g. ``{"orders": "updated_at"}``) and
+        ``soft_delete`` (a root column, non-NULL = deleted) opt in to :meth:`sync`; with a
+        mapping object they override the mapping's own values. Neither changes documents.
+        """
+        if mapping is not None:
+            changes: dict[str, Any] = {}
+            if change_tracking is not None:
+                changes["change_tracking"] = dict(change_tracking)
+            if soft_delete is not None:
+                changes["soft_delete"] = soft_delete
+            if changes:
+                mapping = dataclasses.replace(mapping, **changes)
         if mapping is None:
             if root_table is None:
                 raise MappingError("root_table is required")
@@ -142,6 +165,7 @@ class RelVector:
                 exclude_fields=tuple(exclude_fields), allow_sensitive=tuple(allow_sensitive),
                 templates=dict(templates or {}), labels=dict(labels or {}), name=name,
                 version=version, max_children=max_children,
+                change_tracking=dict(change_tracking or {}), soft_delete=soft_delete,
             )
         self._mapping = resolve(mapping, self.inspect_schema())
         return self._mapping
@@ -167,6 +191,41 @@ class RelVector:
         """(Re-)index the configured entity. Idempotent; see :mod:`relvector.indexing`."""
         return Indexer(self.extractor(), self.provider, self.store).run(
             batch_size, resume=resume, prune=prune, progress=progress)
+
+    def sync(
+        self,
+        batch_size: int = 500,
+        *,
+        lookback: Lookback = None,
+        full_fallback: bool = False,
+        progress: Callable[[SyncStats], None] | None = None,
+    ) -> SyncStats:
+        """Apply source changes since the last index/sync, using the change-tracking columns.
+
+        Requires ``change_tracking`` for the root and every included table and a completed
+        :meth:`index` first. ``lookback`` is the overlap re-scanned below each watermark
+        (default 5 minutes for date/time columns, 0 for numeric ones). Hard deletes are not
+        detected; see :mod:`relvector.sync` for exactly what is and is not guaranteed.
+
+        When sync cannot run safely (missing tracking, no prior index, mapping changed) it
+        raises, unless ``full_fallback=True``, which runs a full :meth:`index` instead and
+        returns stats with ``mode == "full"``.
+        """
+        syncer = Syncer(self.extractor(), self.provider, self.store)
+        if full_fallback:
+            problem = syncer.unavailable()
+            if problem is not None:
+                full = self.index(batch_size)
+                stats = SyncStats(run_id=full.run_id, mode="full", embedded=full.embedded,
+                                  unchanged=full.unchanged, deleted=full.deleted,
+                                  batches=full.batches, roots_rebuilt=full.rows,
+                                  truncated_records=full.truncated_records,
+                                  reason=str(problem), timings=dict(full.timings))
+                cp = self.store.checkpoint(self.mapping.entity)
+                if cp is not None and cp.state is not None:
+                    stats.watermarks = dict(cp.state.get("watermarks") or {})
+                return stats
+        return syncer.run(batch_size, lookback=lookback, progress=progress)
 
     def search(
         self,
