@@ -34,7 +34,7 @@ local = ["sentence-transformers>=2.3"]
 # Optional approximate nearest-neighbour backend (CPU FAISS).
 faiss = ["faiss-cpu>=1.8"]
 postgres = ["psycopg[binary]>=3.1"]
-sqlguard = ["sqlguard-ninja>=0.7,<0.8"]
+sqlguard = ["sqlguard-ninja>=0.7,<0.9"]
 dev = [
     "relvector[faiss,postgres,sqlguard]",
     "pytest>=8.0",
